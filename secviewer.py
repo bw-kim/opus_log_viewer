@@ -1014,7 +1014,9 @@ WEB_NOTES = {
             '같은 IP 가 수십~수백 번 반복하면 sqlmap 같은 자동 도구입니다. 200 응답의 크기가 유난히 크면 데이터가 새어 나갔을 수 있습니다.',
     'lfi': '../ 나 /etc/passwd, php:// 처럼 웹 폴더 밖의 서버 파일을 읽으려는 시도입니다. 200 응답이면 파일 내용이 노출됐을 수 있습니다.',
     'sensitive': '.env, .git, 설정 백업, DB 덤프처럼 비밀번호나 소스가 담긴 파일을 직접 요청했습니다. 상태가 200 이면 실제로 내려받아 간 것입니다.',
-    'exfil': '웹 경로를 통해 큰 백업·DB 파일이 내려받아졌습니다(200 응답). 공격자가 서버에 만들어 둔 덤프를 웹으로 가져갔을 수 있습니다.',
+    'exfil': '웹 경로를 통해 큰 백업·DB 파일이 내려받아졌습니다. 응답 크기는 access log 의 상태 코드 바로 뒤 숫자(보낸 바이트)입니다. '
+             '공격자가 서버에 만들어 둔 덤프를 웹으로 가져갔을 수 있습니다. 상태 코드가 206 이면 파일을 한 번에 받지 않고 '
+             '이어받기·분할 다운로드로 일부씩 받은 것이라, 같은 IP·같은 파일의 응답 크기를 합쳐서 판단했습니다.',
     'bigdl': '평소보다 매우 큰 응답이 나갔습니다. 어떤 파일인지 확인하세요.',
     'scan': '같은 IP 가 짧은 시간에 존재하지 않는 주소를 대량으로 요청했습니다(404). 숨겨진 관리 페이지·백업 파일·취약한 플러그인을 찾는 자동 스캔입니다.',
     'scanner': '요청의 User-Agent 에 보안 점검·해킹 도구 이름이 찍혀 있습니다. 공격 준비 단계의 자동 스캔입니다.',
@@ -2131,9 +2133,9 @@ class Analyzer:
         }
         for (pip, ppath), pt in W['partial'].items():
             if pt['n'] >= 2 and pt['bytes'] >= 10 * 1024 * 1024:
-                self.add(pt['first'], 'web', 'crit', f'{WEB_TYPE_LABEL["exfil"]} — 이어받기(206) {pt["n"]}조각 합계 {human_bytes(pt["bytes"])}',
+                self.add(pt['first'], 'web', 'crit', f'{WEB_TYPE_LABEL["exfil"]} — 부분 전송(HTTP 206) 응답 {pt["n"]}건 합계 {human_bytes(pt["bytes"])}',
                          kind='web', webtype='exfil', ip=pip, cmd=f'GET {ppath}', path=ppath, status=206, src=pt['src'],
-                         line=pt['line'], raw=pt['raw'], count=pt['n'], until=pt['last'], tags=['206 Partial Content', '조각 합산'])
+                         line=pt['line'], raw=pt['raw'], count=pt['n'], until=pt['last'], tags=['HTTP 206 = 파일 일부만 전송', '같은 파일 응답 크기 합산'])
                 st = W['ips'].get(pip)
                 if st is not None:
                     st['types']['exfil'] = st['types'].get('exfil', 0) + 1
