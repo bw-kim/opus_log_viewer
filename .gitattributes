@@ -1,0 +1,3 @@
+* text=auto eol=lf
+samples/var/log/wtmp binary
+samples/var/log/btmp binary

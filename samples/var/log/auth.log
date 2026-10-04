@@ -1,0 +1,103 @@
+Oct  3 01:30:12 web01 sshd[1802]: Accepted publickey for alice from 10.0.0.15 port 50312 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt
+Oct  3 01:30:12 web01 sshd[1802]: pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)
+Oct  3 01:31:05 web01 sudo[1840]:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update
+Oct  3 01:31:05 web01 sudo[1840]: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)
+Oct  3 01:45:30 web01 sshd[1802]: Received disconnect from 10.0.0.15 port 50312:11: disconnected by user
+Oct  3 01:45:30 web01 sshd[1802]: Disconnected from user alice 10.0.0.15 port 50312
+Oct  3 01:45:30 web01 sshd[1802]: pam_unix(sshd:session): session closed for user alice
+Oct  3 02:00:01 web01 CRON[1990]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Oct  3 02:10:03 web01 sshd[2100]: Invalid user admin from 45.133.1.77 port 50000
+Oct  3 02:10:03 web01 sshd[2100]: Failed password for invalid user admin from 45.133.1.77 port 50000 ssh2
+Oct  3 02:10:12 web01 sshd[2100]: Invalid user test from 45.133.1.77 port 50037
+Oct  3 02:10:12 web01 sshd[2100]: Failed password for invalid user test from 45.133.1.77 port 50037 ssh2
+Oct  3 02:10:16 web01 sshd[2100]: Invalid user oracle from 45.133.1.77 port 50074
+Oct  3 02:10:16 web01 sshd[2100]: Failed password for invalid user oracle from 45.133.1.77 port 50074 ssh2
+Oct  3 02:10:20 web01 sshd[2100]: Connection closed by authenticating user oracle 45.133.1.77 port 50074 [preauth]
+Oct  3 02:10:20 web01 sshd[2102]: Failed password for ubuntu from 45.133.1.77 port 50111 ssh2
+Oct  3 02:10:28 web01 sshd[2102]: Failed password for postgres from 45.133.1.77 port 50148 ssh2
+Oct  3 02:10:32 web01 sshd[2102]: Invalid user git from 45.133.1.77 port 50185
+Oct  3 02:10:32 web01 sshd[2102]: Failed password for invalid user git from 45.133.1.77 port 50185 ssh2
+Oct  3 02:10:38 web01 sshd[2102]: Connection closed by authenticating user git 45.133.1.77 port 50185 [preauth]
+Oct  3 02:10:38 web01 sshd[2104]: Failed password for root from 45.133.1.77 port 50222 ssh2
+Oct  3 02:10:46 web01 sshd[2104]: Invalid user admin from 45.133.1.77 port 50259
+Oct  3 02:10:46 web01 sshd[2104]: Failed password for invalid user admin from 45.133.1.77 port 50259 ssh2
+Oct  3 02:10:50 web01 sshd[2104]: Failed password for root from 45.133.1.77 port 50296 ssh2
+Oct  3 02:10:58 web01 sshd[2104]: Connection closed by authenticating user root 45.133.1.77 port 50296 [preauth]
+Oct  3 02:10:58 web01 sshd[2106]: Invalid user deploy from 45.133.1.77 port 50333
+Oct  3 02:10:58 web01 sshd[2106]: Failed password for invalid user deploy from 45.133.1.77 port 50333 ssh2
+Oct  3 02:11:03 web01 sshd[2106]: Failed password for root from 45.133.1.77 port 50370 ssh2
+Oct  3 02:11:07 web01 sshd[2106]: Failed password for root from 45.133.1.77 port 50407 ssh2
+Oct  3 02:11:11 web01 sshd[2106]: Connection closed by authenticating user root 45.133.1.77 port 50407 [preauth]
+Oct  3 02:11:11 web01 sshd[2108]: Invalid user admin from 45.133.1.77 port 50444
+Oct  3 02:11:11 web01 sshd[2108]: Failed password for invalid user admin from 45.133.1.77 port 50444 ssh2
+Oct  3 02:11:18 web01 sshd[2108]: Invalid user test from 45.133.1.77 port 50481
+Oct  3 02:11:18 web01 sshd[2108]: Failed password for invalid user test from 45.133.1.77 port 50481 ssh2
+Oct  3 02:11:25 web01 sshd[2108]: Invalid user oracle from 45.133.1.77 port 50518
+Oct  3 02:11:25 web01 sshd[2108]: Failed password for invalid user oracle from 45.133.1.77 port 50518 ssh2
+Oct  3 02:11:29 web01 sshd[2108]: Connection closed by authenticating user oracle 45.133.1.77 port 50518 [preauth]
+Oct  3 02:11:29 web01 sshd[2110]: Failed password for ubuntu from 45.133.1.77 port 50555 ssh2
+Oct  3 02:11:34 web01 sshd[2110]: Failed password for postgres from 45.133.1.77 port 50592 ssh2
+Oct  3 02:11:38 web01 sshd[2110]: Invalid user git from 45.133.1.77 port 50629
+Oct  3 02:11:38 web01 sshd[2110]: Failed password for invalid user git from 45.133.1.77 port 50629 ssh2
+Oct  3 02:11:46 web01 sshd[2110]: Connection closed by authenticating user git 45.133.1.77 port 50629 [preauth]
+Oct  3 02:11:46 web01 sshd[2112]: Failed password for root from 45.133.1.77 port 50666 ssh2
+Oct  3 02:11:53 web01 sshd[2112]: Invalid user admin from 45.133.1.77 port 50703
+Oct  3 02:11:53 web01 sshd[2112]: Failed password for invalid user admin from 45.133.1.77 port 50703 ssh2
+Oct  3 02:11:57 web01 sshd[2112]: Failed password for root from 45.133.1.77 port 50740 ssh2
+Oct  3 02:12:05 web01 sshd[2112]: Connection closed by authenticating user root 45.133.1.77 port 50740 [preauth]
+Oct  3 02:12:05 web01 sshd[2114]: Invalid user deploy from 45.133.1.77 port 50777
+Oct  3 02:12:05 web01 sshd[2114]: Failed password for invalid user deploy from 45.133.1.77 port 50777 ssh2
+Oct  3 02:12:09 web01 sshd[2114]: Failed password for root from 45.133.1.77 port 50814 ssh2
+Oct  3 02:12:14 web01 sshd[2114]: Failed password for root from 45.133.1.77 port 50851 ssh2
+Oct  3 02:12:23 web01 sshd[2114]: Connection closed by authenticating user root 45.133.1.77 port 50851 [preauth]
+Oct  3 02:12:23 web01 sshd[2116]: Invalid user admin from 45.133.1.77 port 50888
+Oct  3 02:12:23 web01 sshd[2116]: Failed password for invalid user admin from 45.133.1.77 port 50888 ssh2
+Oct  3 02:12:32 web01 sshd[2116]: Invalid user test from 45.133.1.77 port 50925
+Oct  3 02:12:32 web01 sshd[2116]: Failed password for invalid user test from 45.133.1.77 port 50925 ssh2
+Oct  3 02:12:40 web01 sshd[2116]: Invalid user oracle from 45.133.1.77 port 50962
+Oct  3 02:12:40 web01 sshd[2116]: Failed password for invalid user oracle from 45.133.1.77 port 50962 ssh2
+Oct  3 02:12:44 web01 sshd[2116]: Connection closed by authenticating user oracle 45.133.1.77 port 50962 [preauth]
+Oct  3 02:12:44 web01 sshd[2118]: Failed password for ubuntu from 45.133.1.77 port 50999 ssh2
+Oct  3 02:12:52 web01 sshd[2118]: Failed password for postgres from 45.133.1.77 port 51036 ssh2
+Oct  3 02:13:00 web01 sshd[2118]: Invalid user git from 45.133.1.77 port 51073
+Oct  3 02:13:00 web01 sshd[2118]: Failed password for invalid user git from 45.133.1.77 port 51073 ssh2
+Oct  3 02:13:07 web01 sshd[2118]: Connection closed by authenticating user git 45.133.1.77 port 51073 [preauth]
+Oct  3 02:13:07 web01 sshd[2120]: Failed password for root from 45.133.1.77 port 51110 ssh2
+Oct  3 02:13:11 web01 sshd[2120]: Invalid user admin from 45.133.1.77 port 51147
+Oct  3 02:13:11 web01 sshd[2120]: Failed password for invalid user admin from 45.133.1.77 port 51147 ssh2
+Oct  3 02:13:16 web01 sshd[2120]: Failed password for root from 45.133.1.77 port 51184 ssh2
+Oct  3 02:13:20 web01 sshd[2120]: Connection closed by authenticating user root 45.133.1.77 port 51184 [preauth]
+Oct  3 02:13:20 web01 sshd[2122]: Invalid user deploy from 45.133.1.77 port 51221
+Oct  3 02:13:20 web01 sshd[2122]: Failed password for invalid user deploy from 45.133.1.77 port 51221 ssh2
+Oct  3 02:13:28 web01 sshd[2122]: Failed password for root from 45.133.1.77 port 51258 ssh2
+Oct  3 02:13:33 web01 sshd[2122]: Failed password for root from 45.133.1.77 port 51295 ssh2
+Oct  3 02:13:39 web01 sshd[2122]: Connection closed by authenticating user root 45.133.1.77 port 51295 [preauth]
+Oct  3 02:14:07 web01 sshd[2211]: Accepted password for root from 45.133.1.77 port 51544 ssh2
+Oct  3 02:14:07 web01 sshd[2211]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+Oct  3 02:22:40 web01 sudo[2290]:     root : TTY=pts/1 ; PWD=/root ; USER=postgres ; COMMAND=/usr/bin/pg_dump crm
+Oct  3 02:28:40 web01 useradd[2301]: new group: name=sysupd, GID=0
+Oct  3 02:28:40 web01 useradd[2301]: new user: name=sysupd, UID=0, GID=0, home=/home/sysupd, shell=/bin/bash, from=/dev/pts/1
+Oct  3 02:28:52 web01 chpasswd[2305]: pam_unix(chpasswd:chauthtok): password changed for sysupd
+Oct  3 02:33:50 web01 sshd[2211]: Received disconnect from 45.133.1.77 port 51544:11: disconnected by user
+Oct  3 02:33:50 web01 sshd[2211]: Disconnected from user root 45.133.1.77 port 51544
+Oct  3 02:33:50 web01 sshd[2211]: pam_unix(sshd:session): session closed for user root
+Oct  3 02:41:02 web01 sshd[2390]: Accepted password for root from 45.133.1.77 port 51702 ssh2
+Oct  3 02:41:02 web01 sshd[2390]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+Oct  3 02:41:03 web01 sshd[2390]: subsystem request for sftp by user root
+Oct  3 02:41:03 web01 internal-sftp[2392]: session opened for local user root from [45.133.1.77]
+Oct  3 02:41:20 web01 internal-sftp[2392]: open "/tmp/.x/www.tgz" flags READ mode 0666
+Oct  3 02:42:31 web01 internal-sftp[2392]: close "/tmp/.x/www.tgz" bytes read 48234496 written 0
+Oct  3 02:42:40 web01 internal-sftp[2392]: open "/tmp/.x/crm.sql" flags READ mode 0666
+Oct  3 02:42:58 web01 internal-sftp[2392]: close "/tmp/.x/crm.sql" bytes read 9437184 written 0
+Oct  3 02:43:05 web01 internal-sftp[2392]: remove name "/tmp/.x/crm.sql"
+Oct  3 02:43:10 web01 internal-sftp[2392]: session closed for local user root from [45.133.1.77]
+Oct  3 02:43:10 web01 sshd[2390]: Disconnected from user root 45.133.1.77 port 51702
+Oct  3 02:43:10 web01 sshd[2390]: pam_unix(sshd:session): session closed for user root
+Oct  3 02:45:30 web01 sshd[2420]: Accepted publickey for root from 45.133.1.77 port 51766 ssh2: ED25519 SHA256:Atk3rK1ckK3yF1ngerPr1nt
+Oct  3 02:45:30 web01 sshd[2420]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+Oct  3 02:45:44 web01 sshd[2420]: Disconnected from user root 45.133.1.77 port 51766
+Oct  3 02:45:44 web01 sshd[2420]: pam_unix(sshd:session): session closed for user root
+Oct  3 02:50:10 web01 sshd[2501]: Accepted password for sysupd from 91.240.118.5 port 40211 ssh2
+Oct  3 02:50:10 web01 sshd[2501]: pam_unix(sshd:session): session opened for user sysupd(uid=0) by (uid=0)
+Oct  3 02:52:02 web01 sshd[2501]: Disconnected from user sysupd 91.240.118.5 port 40211
+Oct  3 02:52:02 web01 sshd[2501]: pam_unix(sshd:session): session closed for user sysupd
