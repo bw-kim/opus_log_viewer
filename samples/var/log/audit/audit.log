@@ -110,26 +110,43 @@ type=SYSCALL msg=audit(1790962206.000:1230): arch=c000003e syscall=59 success=ye
 type=EXECVE msg=audit(1790962206.000:1230): argc=2 a0="crontab" a1="-"
 type=CWD msg=audit(1790962206.000:1230): cwd="/root"
 type=PROCTITLE msg=audit(1790962206.000:1230): proctitle=63726F6E746162002D
-type=USER_LOGIN msg=audit(1790962863.000:1231): pid=2390 uid=0 auid=0 ses=6 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
-type=USER_LOGIN msg=audit(1790963131.000:1232): pid=2420 uid=0 auid=0 ses=7 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
-type=SYSCALL msg=audit(1790963131.000:1233): arch=c000003e syscall=59 success=yes exit=0 ppid=8572 pid=8573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=7 comm="scp" exe="/usr/bin/scp" key=(null)
-type=EXECVE msg=audit(1790963131.000:1233): argc=3 a0="scp" a1="-f" a2="/tmp/.x/db.sql.gz"
-type=CWD msg=audit(1790963131.000:1233): cwd="/root"
-type=PROCTITLE msg=audit(1790963131.000:1233): proctitle=736370002D66002F746D702F2E782F64622E73716C2E677A
-type=USER_LOGIN msg=audit(1790963411.000:1234): pid=2501 uid=0 auid=0 ses=8 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=91.240.118.5 terminal=/dev/pts/1 res=success'
-type=SYSCALL msg=audit(1790963420.000:1235): arch=c000003e syscall=59 success=yes exit=0 ppid=7354 pid=7355 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="id" exe="/usr/bin/id" key=(null)
-type=EXECVE msg=audit(1790963420.000:1235): argc=1 a0="id"
-type=CWD msg=audit(1790963420.000:1235): cwd="/root"
-type=PROCTITLE msg=audit(1790963420.000:1235): proctitle=6964
-type=SYSCALL msg=audit(1790963431.000:1236): arch=c000003e syscall=59 success=yes exit=0 ppid=6501 pid=6502 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="cat" exe="/usr/bin/cat" key=(null)
-type=EXECVE msg=audit(1790963431.000:1236): argc=2 a0="cat" a1="/etc/shadow"
-type=CWD msg=audit(1790963431.000:1236): cwd="/root"
-type=PROCTITLE msg=audit(1790963431.000:1236): proctitle=636174002F6574632F736861646F77
-type=SYSCALL msg=audit(1790963462.000:1237): arch=c000003e syscall=59 success=yes exit=0 ppid=5572 pid=5573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="ls" exe="/usr/bin/ls" key=(null)
-type=EXECVE msg=audit(1790963462.000:1237): argc=3 a0="ls" a1="-la" a2="/tmp/.x"
-type=CWD msg=audit(1790963462.000:1237): cwd="/root"
-type=PROCTITLE msg=audit(1790963462.000:1237): proctitle=6C73002D6C61002F746D702F2E78
-type=SYSCALL msg=audit(1790963500.000:1238): arch=c000003e syscall=59 success=yes exit=0 ppid=6813 pid=6814 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="python3" exe="/usr/bin/python3" key=(null)
-type=EXECVE msg=audit(1790963500.000:1238): argc=3 a0="python3" a1="-c" a2=696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229
-type=CWD msg=audit(1790963500.000:1238): cwd="/root"
-type=PROCTITLE msg=audit(1790963500.000:1238): proctitle=707974686F6E33002D6300696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229
+type=SYSCALL msg=audit(1790962330.000:1231): arch=c000003e syscall=59 success=yes exit=0 ppid=2339 pid=2340 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="ssh" exe="/usr/bin/ssh" key=(null)
+type=EXECVE msg=audit(1790962330.000:1231): argc=4 a0="ssh" a1="-o" a2="StrictHostKeyChecking=no" a3="deploy@10.0.0.20"
+type=CWD msg=audit(1790962330.000:1231): cwd="/root"
+type=PROCTITLE msg=audit(1790962330.000:1231): proctitle=737368002D6F00537472696374486F73744B6579436865636B696E673D6E6F006465706C6F794031302E302E302E3230
+type=SYSCALL msg=audit(1790962360.000:1232): arch=c000003e syscall=59 success=yes exit=0 ppid=2347 pid=2348 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=5 comm="ssh" exe="/usr/bin/ssh" key=(null)
+type=EXECVE msg=audit(1790962360.000:1232): argc=2 a0="ssh" a1="root@10.0.0.5"
+type=CWD msg=audit(1790962360.000:1232): cwd="/root"
+type=PROCTITLE msg=audit(1790962360.000:1232): proctitle=73736800726F6F744031302E302E302E35
+type=USER_LOGIN msg=audit(1790962362.000:1233): pid=2350 uid=0 auid=0 ses=9 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=10.0.0.5 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790962375.000:1234): arch=c000003e syscall=59 success=yes exit=0 ppid=8572 pid=8573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=9 comm="cat" exe="/usr/bin/cat" key=(null)
+type=EXECVE msg=audit(1790962375.000:1234): argc=2 a0="cat" a1="/root/.ssh/id_rsa"
+type=CWD msg=audit(1790962375.000:1234): cwd="/root"
+type=PROCTITLE msg=audit(1790962375.000:1234): proctitle=636174002F726F6F742F2E7373682F69645F727361
+type=SYSCALL msg=audit(1790962385.000:1235): arch=c000003e syscall=59 success=yes exit=0 ppid=7354 pid=7355 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=9 comm="ssh" exe="/usr/bin/ssh" key=(null)
+type=EXECVE msg=audit(1790962385.000:1235): argc=4 a0="ssh" a1="-i" a2="/root/.ssh/id_rsa" a3="backup@10.0.0.30"
+type=CWD msg=audit(1790962385.000:1235): cwd="/root"
+type=PROCTITLE msg=audit(1790962385.000:1235): proctitle=737368002D69002F726F6F742F2E7373682F69645F727361006261636B75704031302E302E302E3330
+type=USER_LOGIN msg=audit(1790962863.000:1236): pid=2390 uid=0 auid=0 ses=6 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
+type=USER_LOGIN msg=audit(1790963131.000:1237): pid=2420 uid=0 auid=0 ses=7 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=45.133.1.77 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790963131.000:1238): arch=c000003e syscall=59 success=yes exit=0 ppid=6501 pid=6502 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=7 comm="scp" exe="/usr/bin/scp" key=(null)
+type=EXECVE msg=audit(1790963131.000:1238): argc=3 a0="scp" a1="-f" a2="/tmp/.x/db.sql.gz"
+type=CWD msg=audit(1790963131.000:1238): cwd="/root"
+type=PROCTITLE msg=audit(1790963131.000:1238): proctitle=736370002D66002F746D702F2E782F64622E73716C2E677A
+type=USER_LOGIN msg=audit(1790963411.000:1239): pid=2501 uid=0 auid=0 ses=8 subj=unconfined msg='op=login id=0 exe="/usr/sbin/sshd" hostname=? addr=91.240.118.5 terminal=/dev/pts/1 res=success'
+type=SYSCALL msg=audit(1790963420.000:1240): arch=c000003e syscall=59 success=yes exit=0 ppid=5572 pid=5573 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="id" exe="/usr/bin/id" key=(null)
+type=EXECVE msg=audit(1790963420.000:1240): argc=1 a0="id"
+type=CWD msg=audit(1790963420.000:1240): cwd="/root"
+type=PROCTITLE msg=audit(1790963420.000:1240): proctitle=6964
+type=SYSCALL msg=audit(1790963431.000:1241): arch=c000003e syscall=59 success=yes exit=0 ppid=6813 pid=6814 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="cat" exe="/usr/bin/cat" key=(null)
+type=EXECVE msg=audit(1790963431.000:1241): argc=2 a0="cat" a1="/etc/shadow"
+type=CWD msg=audit(1790963431.000:1241): cwd="/root"
+type=PROCTITLE msg=audit(1790963431.000:1241): proctitle=636174002F6574632F736861646F77
+type=SYSCALL msg=audit(1790963462.000:1242): arch=c000003e syscall=59 success=yes exit=0 ppid=7795 pid=7796 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="ls" exe="/usr/bin/ls" key=(null)
+type=EXECVE msg=audit(1790963462.000:1242): argc=3 a0="ls" a1="-la" a2="/tmp/.x"
+type=CWD msg=audit(1790963462.000:1242): cwd="/root"
+type=PROCTITLE msg=audit(1790963462.000:1242): proctitle=6C73002D6C61002F746D702F2E78
+type=SYSCALL msg=audit(1790963500.000:1243): arch=c000003e syscall=59 success=yes exit=0 ppid=6711 pid=6712 auid=0 uid=0 gid=0 euid=0 tty=pts1 ses=8 comm="python3" exe="/usr/bin/python3" key=(null)
+type=EXECVE msg=audit(1790963500.000:1243): argc=3 a0="python3" a1="-c" a2=696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229
+type=CWD msg=audit(1790963500.000:1243): cwd="/root"
+type=PROCTITLE msg=audit(1790963500.000:1243): proctitle=707974686F6E33002D6300696D706F7274207074793B7074792E737061776E28222F62696E2F626173682229

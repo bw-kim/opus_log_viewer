@@ -25,6 +25,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'samples')
 KST = dt.timezone(dt.timedelta(hours=9))
 HOST = 'web01'
 ATK, ATK2, ADMIN = '45.133.1.77', '91.240.118.5', '10.0.0.15'
+SERVER_IP = '10.0.0.5'  # 이 서버(web01) 자신의 IP
 random.seed(7)
 
 
@@ -180,6 +181,7 @@ def main():
 
     # ── 02:14 root 로그인 성공 (세션 1: 대화형) ──
     auth += [
+        syslog(T('02:14:07'), 'sshd', 2211, f'Connection from {ATK} port 51544 on {SERVER_IP} port 22 rdomain ""'),
         syslog(T('02:14:07'), 'sshd', 2211, f'Accepted password for root from {ATK} port 51544 ssh2'),
         syslog(T('02:14:07'), 'sshd', 2211, 'pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)'),
     ]
@@ -194,6 +196,20 @@ def main():
         for k, argv in enumerate(procs):
             uid = 105 if argv[0] == 'pg_dump' else 0
             audit.execve(tt + dt.timedelta(seconds=k), argv, 5, 0, uid=uid)
+    # history 를 끈 뒤(02:31) 에 한 일 — auditd 에만 남는다
+    #  02:32 내부망 다른 서버로 SSH (나간 접속), 02:32:40 이 서버 자신으로 다시 SSH (서버 내부에서 출발한 접속)
+    audit.execve(T('02:32:10'), ['ssh', '-o', 'StrictHostKeyChecking=no', 'deploy@10.0.0.20'], 5, 0, pid=2340)
+    audit.execve(T('02:32:40'), ['ssh', f'root@{SERVER_IP}'], 5, 0, pid=2348)
+    auth += [
+        syslog(T('02:32:41'), 'sshd', 2350, f'Connection from {SERVER_IP} port 40122 on {SERVER_IP} port 22 rdomain ""'),
+        syslog(T('02:32:41'), 'sshd', 2350, f'Accepted password for root from {SERVER_IP} port 40122 ssh2'),
+        syslog(T('02:32:41'), 'sshd', 2350, 'pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)'),
+        syslog(T('02:33:20'), 'sshd', 2350, f'Disconnected from user root {SERVER_IP} port 40122'),
+        syslog(T('02:33:20'), 'sshd', 2350, 'pam_unix(sshd:session): session closed for user root'),
+    ]
+    audit.login(T('02:32:42'), 2350, 9, 'root', 0, SERVER_IP)
+    audit.execve(T('02:32:55'), ['cat', '/root/.ssh/id_rsa'], 9, 0)
+    audit.execve(T('02:33:05'), ['ssh', '-i', '/root/.ssh/id_rsa', 'backup@10.0.0.30'], 9, 0)
     auth += [
         syslog(T('02:22:40'), 'sudo', 2290, '    root : TTY=pts/1 ; PWD=/root ; USER=postgres ; COMMAND=/usr/bin/pg_dump crm'),
         syslog(T('02:28:40'), 'useradd', 2301, 'new group: name=sysupd, GID=0'),
@@ -249,7 +265,13 @@ def main():
     write('var/log/auth.log', '\n'.join(sorted(auth, key=lambda l: l[:15])) + '\n', mtime)
     write('var/log/audit/audit.log', '\n'.join(audit.lines) + '\n', mtime)
     write('root/.bash_history', '\n'.join(hist) + '\n', mtime)
-    write('home/alice/.bash_history', 'sudo apt update\ndf -h\nls -la /var/www\nexit\n', mtime)
+    write('home/alice/.bash_history', 'sudo apt update\ndf -h\nls -la /var/www\nssh backup@10.0.0.30\nexit\n', mtime)
+    write('root/.ssh/known_hosts', '\n'.join([
+        '10.0.0.30 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBk9backupserver',
+        '10.0.0.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeploySrv20',
+        f'{SERVER_IP} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIWeb01Self',
+        '|1|kq2bZ8Ri2vQf3Yt0n9KXo7rQ1aI=|mE0zW0b9Qy8Rk3Lr2bT0Q1v9x3A= ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHashed',
+    ]) + '\n', mtime)
     for name, data in (('var/log/wtmp', wtmp), ('var/log/btmp', btmp)):
         p = os.path.join(ROOT, name)
         os.makedirs(os.path.dirname(p), exist_ok=True)

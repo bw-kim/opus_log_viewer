@@ -1,7 +1,7 @@
-2026-10-03 02:22:41.249 KST [3120] [unknown]@[unknown] LOG:  connection received: host=[local]
-2026-10-03 02:22:41.083 KST [3120] postgres@crm LOG:  connection authorized: user=postgres database=crm application_name=pg_dump
-2026-10-03 02:22:44.588 KST [3120] postgres@crm LOG:  statement: COPY public.customers (id, name, email, phone, created_at) TO stdout;
-2026-10-03 02:22:44.307 KST [3120] postgres@crm LOG:  statement: COPY public.contacts (id, name, email, phone, created_at) TO stdout;
-2026-10-03 02:22:44.537 KST [3120] postgres@crm LOG:  statement: COPY public.deals (id, name, email, phone, created_at) TO stdout;
-2026-10-03 02:22:44.506 KST [3120] postgres@crm LOG:  statement: COPY public.invoices (id, name, email, phone, created_at) TO stdout;
-2026-10-03 02:23:30.896 KST [3120] postgres@crm LOG:  disconnection: session time: 0:00:49.102 user=postgres database=crm host=[local]
+2026-10-03 02:22:41.588 KST [3120] [unknown]@[unknown] LOG:  connection received: host=[local]
+2026-10-03 02:22:41.307 KST [3120] postgres@crm LOG:  connection authorized: user=postgres database=crm application_name=pg_dump
+2026-10-03 02:22:44.537 KST [3120] postgres@crm LOG:  statement: COPY public.customers (id, name, email, phone, created_at) TO stdout;
+2026-10-03 02:22:44.506 KST [3120] postgres@crm LOG:  statement: COPY public.contacts (id, name, email, phone, created_at) TO stdout;
+2026-10-03 02:22:44.896 KST [3120] postgres@crm LOG:  statement: COPY public.deals (id, name, email, phone, created_at) TO stdout;
+2026-10-03 02:22:44.351 KST [3120] postgres@crm LOG:  statement: COPY public.invoices (id, name, email, phone, created_at) TO stdout;
+2026-10-03 02:23:30.746 KST [3120] postgres@crm LOG:  disconnection: session time: 0:00:49.102 user=postgres database=crm host=[local]

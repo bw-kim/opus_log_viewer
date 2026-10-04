@@ -61,6 +61,8 @@ CATS = {
     'exec':         '악성 실행',
     'privesc':      '권한 상승',
     'recon':        '정찰',
+    'lateral':      '나간 접속',
+    'fileop':       '파일 작업',
 }
 
 # ───────────────────────── 명령어 분류 규칙 ─────────────────────────
@@ -100,12 +102,19 @@ RULES = [(c, s, l, re.compile(p)) for c, s, l, p in [
      r'|\bchmod\s+(?:[ugoa]*\+x|0?7[0-7]{2})\b|\|\s*(?:ba|z)?sh\b|\bmkfifo\b|\bnohup\b|\bLD_PRELOAD='
      r'|(?:^|[;&|]\s*)\./\S+|(?:^|[;&|]\s*)/(?:tmp|dev/shm|var/tmp)/\S+|\bxmrig\b'),
     ('recon', 'high', '자격증명 탐색',
-     r'(?:cat|less|more|head|tail|grep|strings|vi|vim|nano)\b.*(?:/etc/shadow|wp-config\.php|config\.php|\.env\b'
+     r'(?:cat|less|more|head|tail|grep|strings|vi|vim|nano|cp|base64|xxd)\b.*(?:/etc/shadow|wp-config\.php|config\.php|\.env\b'
      r'|\.my\.cnf|\.pgpass|id_rsa|id_ed25519|credentials|\.aws/|database\.yml|settings\.py)'),
+    ('lateral', 'high', 'SSH 터널', r'\bssh\b.*\s-[LRD]\s*\S'),
+    ('lateral', 'med', '다른 서버로 접속', _c(r'ssh|telnet|mosh')),
     ('privesc', 'med', '권한 상승',
      _c(r'sudo|su|pkexec|doas') + r'|chmod\s+(?:[ugoa]*\+s|[2-7][0-7]{3})\b|\bsetcap\b'),
     ('db', 'med', 'DB 접속', _c(r'mysql|mariadb|psql|mongo|mongosh|redis-cli|sqlplus|sqlite3|clickhouse-client')),
+    ('fileop', 'low', '파일 삭제', _c(r'rm|unlink|rmdir|shred')),
+    ('fileop', 'low', '파일 이동·이름 변경', _c(r'mv')),
+    ('fileop', 'low', '파일 복사', _c(r'cp|install|dd')),
     ('cmd', 'low', '압축·스테이징', _c(r'tar|zip|7z|7za|rar|gzip|bzip2|xz|split')),
+    ('fileop', 'low', '파일 저장', r'(?:^|[^0-9&>])>>?\s*(?!/dev/null\b|&)[^\s;&|]+|\btee\s+(?:-a\s+)?[^\s;&|-]'),
+    ('fileop', 'info', '파일 생성·폴더 생성', _c(r'touch|mkdir')),
     ('recon', 'low', '정찰',
      _c(r'whoami|id|uname|hostname|ifconfig|netstat|ss|ps|w|who|last|lastlog|lsof|env|arp|route|getent')
      + r'|cat\s+/etc/(?:passwd|group|hosts|issue|\S*release)|\bfind\s.*-perm\s+(?:[-/]?[246]000|-u=s)|\bip\s+(?:a|addr|r|route|neigh)\b|crontab\s+-l|sudo\s+-l'),
@@ -744,10 +753,235 @@ def explain_cmd(cmd):
     return {'summary': S[:5], 'details': D[:6], 'check': C[:3]}
 
 
+LOOPBACK = {'localhost', '127.0.0.1', '::1', '0.0.0.0', 'ip6-localhost'}
+
+
+def host_kind(host, self_ips=()):
+    """'self' | 'private' | 'public' | 'domain'"""
+    if host in LOOPBACK or host.startswith('127.') or host in self_ips:
+        return 'self'
+    try:
+        a = ipaddress.ip_address(host)
+        return 'private' if (a.is_private or a.is_link_local) else 'public'
+    except ValueError:
+        return 'domain'
+
+
+def outbound_targets(cmd):
+    """명령에서 '이 서버 → 다른 곳' 으로 나간 연결의 목적지를 뽑는다."""
+    out = []
+
+    def add(host, port, proto, what, user=None):
+        host = (host or '').strip('[]').rstrip('/').lower()
+        if not host or not re.match(r'^[\w.\-:]+$', host) or host.startswith('-'):
+            return
+        if any((o['host'], o['proto'], o['what']) == (host, proto, what) for o in out):
+            return
+        out.append({'host': host, 'port': port, 'proto': proto, 'what': what, 'user': user or None})
+
+    for seg, _ in _split_segments(cmd):
+        toks, redir, stdin, pre = _parse_segment(seg)
+        if toks:
+            name, args = os.path.basename(toks[0]), toks[1:]
+            if name in ('ssh', 'mosh'):
+                pos = _positional(args, ('-p', '-i', '-o', '-l', '-L', '-R', '-D', '-F', '-J', '-b', '-c', '-E', '-e',
+                                         '-m', '-O', '-Q', '-S', '-W', '-w', '-B', '-I'))
+                if pos:
+                    user, _, host = pos[0].rpartition('@')
+                    tun = any(_optval(args, o) for o in ('-L', '-R', '-D'))
+                    add(host, _optval(args, '-p') or '22', 'ssh',
+                        'SSH 터널' if tun else ('SSH 접속 + 원격 명령' if len(pos) > 1 else 'SSH 접속'), user or _optval(args, '-l'))
+                j = _optval(args, '-J')
+                if j:
+                    add(j.rpartition('@')[2].split(':')[0], None, 'ssh', 'SSH 경유(점프) 서버')
+            elif name in ('scp', 'rsync', 'sftp'):
+                if name == 'scp' and any(re.fullmatch(r'-[A-Za-z]*[ft]', a) for a in args):
+                    pass  # scp -f/-t 는 들어온 접속의 서버 쪽 동작
+                elif name == 'sftp':
+                    pos = _positional(args, ('-P', '-i', '-o', '-F', '-b', '-J'))
+                    if pos:
+                        u, _, h = pos[0].rpartition('@')
+                        add(h.split(':')[0], _optval(args, '-P') or '22', 'sftp', 'SFTP 접속', u)
+                else:
+                    pos = _positional(args, ('-P', '-i', '-o', '-F', '-l', '-S', '-c', '-e', '--rsh', '-J'))
+                    for k, a in enumerate(pos):
+                        m = re.match(r'^(?:([^@/\s]+)@)?([^:/\s]+):', a)
+                        if m and not a.startswith('/'):
+                            add(m[2], _optval(args, '-P') or '22', name,
+                                '파일 보냄 (업로드)' if k == len(pos) - 1 else '파일 가져옴 (다운로드)', m[1])
+            elif name in ('curl', 'wget', 'lftp', 'ftp', 'tftp', 'axel', 'aria2c'):
+                up = name == 'curl' and (_optval(args, '-T', '--upload-file')
+                                         or re.search(r'(?:-F|--form)\s+\S*@|--data(?:-binary)?\s+@|\s-d\s*@', seg))
+                for u in re.findall(r'((?:https?|ftps?|sftp|tftp)://[^\s\'"]+)', seg):
+                    m = re.match(r'(\w+)://(?:([^@/\s:]+)(?::[^@/\s]*)?@)?(\[[^\]]+\]|[^/:\s]+)(?::(\d+))?', u)
+                    if m:
+                        add(m[3], m[4], m[1], '파일 보냄 (업로드)' if up else '파일 내려받음', m[2])
+                if name in ('ftp', 'lftp', 'tftp'):
+                    pos = _positional(args, ('-u', '-p', '-e'))
+                    if pos and '://' not in pos[0]:
+                        add(pos[0].rpartition('@')[2], None, name, 'FTP 접속')
+            elif name in ('nc', 'ncat', 'netcat', 'telnet'):
+                if not any(a.startswith('-') and not a.startswith('--') and 'l' in a[1:] for a in args):
+                    pos = _positional(args, ('-p', '-w', '-e', '-c', '-s', '-i', '-q', '-x'))
+                    if pos:
+                        what = '리버스 셸' if (_optval(args, '-e') or _optval(args, '-c')) else \
+                            '파일 보냄 (업로드)' if stdin else ('텔넷 접속' if name == 'telnet' else 'TCP 직접 연결')
+                        add(pos[0], pos[1] if len(pos) > 1 else None, name, what)
+            elif name == 'socat':
+                for h, prt in re.findall(r'TCP[46]?:([\w.\-]+):(\d+)', seg, re.I):
+                    add(h, prt, 'tcp', 'socat 연결')
+            elif name in ('mysql', 'mariadb', 'mysqldump', 'psql', 'pg_dump', 'redis-cli', 'mongo', 'mongosh', 'mongodump'):
+                h = _optval(args, '-h', '--host')
+                if h and h not in LOOPBACK:
+                    add(h, _optval(args, '-P' if name.startswith(('mysql', 'maria')) else '-p', '--port'), 'db',
+                        'DB 접속 후 덤프' if 'dump' in name else 'DB 접속')
+            elif name == 'nmap':
+                for t in _positional(args, ('-p', '-oN', '-oX', '-oG', '-oA', '-iL', '--top-ports', '-e', '-S')):
+                    add(t.split('/')[0], None, 'scan', '포트 스캔')
+        for h, prt in re.findall(r'/dev/(?:tcp|udp)/([^/\s]+)/(\d+)', seg):
+            add(h, prt, 'tcp', '리버스 셸' if re.search(r'-i\b|[0-2]>&[0-2]', seg) else 'TCP 직접 연결')
+    return out
+
+
+# 파일 작업 종류 → (아이콘 구분, 위험도)
+FILE_OP_KIND = {
+    '외부로 유출': 'out', '외부에서 반입': 'in', '삭제': 'del', '이동': 'mv', '복사': 'cp', '저장': 'save', '생성': 'new',
+    '압축 생성': 'zip', '압축에 포함': 'zip', '압축 해제': 'unzip', '실행': 'exec', '권한 변경': 'perm', '시각 위조': 'perm',
+    '내려받아 저장': 'in', '열람': 'read',
+}
+
+
+def file_ops(cmd, cwd=None):
+    """명령이 건드린 파일 → [{'op', 'path', 'to'?, 'how'}]"""
+    ops = []
+
+    def norm(pth):
+        pth = pth.strip('\'"')
+        if cwd and pth and not pth.startswith(('/', '~', '$')) and not re.match(r'^[^/\s]*:', pth):
+            pth = cwd.rstrip('/') + '/' + pth.lstrip('./')
+        return pth
+
+    def add(op, path, how, to=None):
+        if not path or path in ('-', '.', '/dev/null') or path.startswith('/dev/') or path.startswith('-'):
+            return
+        x = {'op': op, 'path': norm(path), 'how': how}
+        if to:
+            x['to'] = norm(to)
+        if x not in ops:
+            ops.append(x)
+
+    for seg, sep in _split_segments(cmd):
+        toks, redir, stdin, pre = _parse_segment(seg)
+        for fd, op, path in redir:
+            if fd in ('1', '&') and path != '/dev/null':
+                add('저장', path, '내용 추가(>>)' if op == '>>' else '출력 저장(>)')
+        if not toks:
+            continue
+        name, args = os.path.basename(toks[0]), toks[1:]
+        pos = _positional(args, ('-t', '-S', '-m', '-o', '-g', '-n', '-s', '--target-directory', '--suffix'))
+        if name in ('rm', 'unlink', 'rmdir'):
+            for f in pos:
+                add('삭제', f, name + (' -rf' if any(a in ('-rf', '-fr', '-r', '-R') for a in args) else ''))
+        elif name == 'shred':
+            for f in pos:
+                add('삭제', f, 'shred (복구 불가 삭제)')
+        elif name == 'mv' and len(pos) >= 2:
+            for f in pos[:-1]:
+                add('이동', f, 'mv', to=pos[-1])
+        elif name in ('cp', 'install') and len(pos) >= 2:
+            for f in pos[:-1]:
+                add('복사', f, name, to=pos[-1])
+        elif name == 'dd':
+            src = next((a[3:] for a in args if a.startswith('if=')), None)
+            dst = next((a[3:] for a in args if a.startswith('of=')), None)
+            if src and dst:
+                add('복사', src, 'dd', to=dst)
+        elif name == 'touch':
+            how = '시각 위조' if (_optval(args, '-r') or _optval(args, '-d') or _optval(args, '-t')) else '생성'
+            for f in _positional(args, ('-r', '-d', '-t')):
+                add(how, f, 'touch')
+        elif name == 'mkdir':
+            for f in _positional(args, ('-m',)):
+                add('생성', f, 'mkdir (폴더)')
+        elif name == 'tee':
+            for f in pos:
+                add('저장', f, 'tee')
+        elif name in ('chmod', 'chown', 'chattr', 'chgrp') and len(args) >= 2:
+            mode = args[0]
+            for f in [a for a in args[1:] if not a.startswith('-')]:
+                add('권한 변경', f, f'{name} {mode}')
+        elif name == 'tar' and args:
+            flags = args[0].lstrip('-')
+            arch = _optval(args, '-f') if '-f' in args else (args[1] if len(args) > 1 and 'f' in flags else None)
+            rest = [a for a in args[(2 if arch and arch == args[1] else 1):] if not a.startswith('-') and a != arch]
+            if 'c' in flags and arch:
+                add('압축 생성', arch, 'tar')
+                for f in rest:
+                    add('압축에 포함', f, f'tar → {arch}')
+            elif 'x' in flags and arch:
+                add('압축 해제', arch, 'tar')
+        elif name in ('zip', '7z', '7za', 'rar') and pos:
+            add('압축 생성', pos[1] if name in ('7z', '7za', 'rar') and len(pos) > 1 else pos[0], name)
+        elif name in ('gzip', 'bzip2', 'xz') and pos:
+            for f in pos:
+                add('압축 생성', f, name)
+        elif name in ('unzip', 'gunzip') and pos:
+            add('압축 해제', pos[0], name)
+        elif name == 'scp':
+            if any(re.fullmatch(r'-[A-Za-z]*f', a) for a in args):
+                for f in pos:
+                    add('외부로 유출', f, 'scp -f (원격에서 가져감)')
+            elif any(re.fullmatch(r'-[A-Za-z]*t', a) for a in args):
+                for f in pos:
+                    add('외부에서 반입', f, 'scp -t (원격에서 올림)')
+            else:
+                fp = _positional(args, ('-P', '-i', '-o', '-F', '-l', '-S', '-c', '-J'))
+                if len(fp) >= 2 and _ARG_REMOTE.match(fp[-1]):
+                    for f in fp[:-1]:
+                        add('외부로 유출', f, f'scp → {fp[-1].split(":")[0]}')
+                elif len(fp) >= 2:
+                    add('외부에서 반입', fp[-1], f'scp ← {fp[0].split(":")[0]}')
+        elif name == 'rsync':
+            fp = _positional(args, ('-e', '--rsh'))
+            if len(fp) >= 2 and _ARG_REMOTE.match(fp[-1]):
+                for f in fp[:-1]:
+                    add('외부로 유출', f, f'rsync → {fp[-1].split(":")[0]}')
+        elif name == 'curl':
+            up = _optval(args, '-T', '--upload-file')
+            if up:
+                add('외부로 유출', up, f'curl 업로드 → {_url_host(seg) or "외부"}')
+            for m in re.finditer(r'(?:-F|--form)\s+\S*@([^\s;\'"]+)|--data(?:-binary)?\s+@(\S+)', seg):
+                add('외부로 유출', m.group(1) or m.group(2), f'curl 전송 → {_url_host(seg) or "외부"}')
+            o = _optval(args, '-o', '--output')
+            if o:
+                add('내려받아 저장', o, f'curl ← {_url_host(seg) or "외부"}')
+        elif name == 'wget':
+            o = _optval(args, '-O', '--output-document')
+            if o:
+                add('내려받아 저장', o, f'wget ← {_url_host(seg) or "외부"}')
+        elif name in ('nc', 'ncat', 'netcat') and stdin:
+            add('외부로 유출', stdin, 'nc 로 전송')
+        elif name in ('cat', 'less', 'more', 'head', 'tail', 'vi', 'vim', 'nano', 'strings'):
+            for f in pos:
+                if any(re.search(rx, f) for rx, _, _ in CRED_FILES) or f == '/etc/passwd':
+                    add('열람', f, name)
+        elif toks[0].startswith(('./', '/tmp/', '/dev/shm/', '/var/tmp/')) or (toks[0].startswith('/') and HIDDEN_RX.search(toks[0])):
+            add('실행', toks[0], '직접 실행')
+    return ops
+
+
 def event_note(e):
     """명령이 아닌 이벤트(로그인, 전송, 덤프 감지 등)가 무슨 뜻인지 설명"""
     k, tags = e.get('kind'), e.get('tags') or []
     if k == 'login_ok':
+        if e.get('self_origin'):
+            o = e.get('origin')
+            base = ('이 서버 안에서 출발한 SSH 접속입니다(출발지 IP 가 이 서버 자신). 그래서 이 IP 는 공격자의 실제 위치가 아닙니다. ')
+            if o:
+                return base + (f'바로 앞서 세션 {o.get("sid") or "?"}' + (f'({o["ip"]} 에서 들어온 접속)' if o.get('ip') else '')
+                               + f' 에서 "{_shorten(o["cmd"], 40)}" 를 실행한 기록이 있어, 그 사람이 서버 안에서 다시 접속한 것으로 보입니다.')
+            return base + ('같은 시각에 열려 있던 다른 세션, auditd 의 ssh 실행 기록, 웹셸(웹 서버 로그), 자동화 스크립트(cron)를 확인해 '
+                           '실제로 누가 접속을 시작했는지 찾아야 합니다.')
         if '백도어 계정' in tags:
             return '공격자가 만들어 둔 백도어 계정으로 다시 로그인했습니다. 처음 침입 경로를 막아도 이 계정으로 계속 들어올 수 있습니다.'
         if '침입 IP 키 로그인' in tags:
@@ -810,6 +1044,11 @@ def annotate(e):
                 e['explain'] = {'summary': [f'DB 에서 {meaning}했습니다.'], 'details': [], 'check': []}
         else:
             x = explain_cmd(e['cmd'])
+            selfd = [d for d in e.get('dest', []) if d.get('kind') == 'self' and d['proto'] in ('ssh', 'sftp', 'scp', 'rsync')]
+            if selfd:
+                x['summary'] = [t for t in x['summary'] if not t.startswith('이 서버에서 다른 서버')]
+                x['summary'].insert(0, f'이 서버에서 자기 자신({selfd[0]["host"]})으로 다시 SSH 접속했습니다. 이미 들어와 있는 상태에서 '
+                                       '다른 계정으로 바꾸거나 제대로 된 셸을 얻으려고 할 때 쓰는 방식이라, 이어지는 로그인 기록의 출발지가 이 서버 자신으로 찍힙니다.')
             if x['summary'] or x['details']:
                 e['explain'] = x
     note = event_note(e)
@@ -921,7 +1160,7 @@ def shell_join(args):
 
 # ───────────────────────── 분석기 ─────────────────────────
 class Analyzer:
-    def __init__(self, root, tz, year=None, audit_all=False, use_journal=True, since=None):
+    def __init__(self, root, tz, year=None, audit_all=False, use_journal=True, since=None, server_ips=()):
         self.root = os.path.abspath(root)
         self.tz = tz
         self.year = year
@@ -936,6 +1175,9 @@ class Analyzer:
         self.uid_names = {}
         self.uid0_alias = set()
         self.histories = []
+        self.known_hosts = []
+        self.server_ips = {x.strip() for x in server_ips if x and x.strip()}
+        self.server_ips_auto = set()
         self.has_auth = False
 
     # ── 기본 ──
@@ -1014,6 +1256,7 @@ class Analyzer:
         self.scan_mysql()
         self.scan_postgres()
         self.scan_ftp()
+        self.scan_known_hosts()
         if self.since:
             self.events = [e for e in self.events if e['ts'] is None or e['ts'] >= self.since]
         return self.correlate()
@@ -1112,6 +1355,12 @@ class Analyzer:
                 self.sftp_line(ts, msg, base)
 
     def sshd_line(self, ts, msg, base):
+        m = re.match(r'^(?:Connection from \S+ port \d+ on (\S+) port \d+|Server listening on (\S+) port \d+)', msg)
+        if m:
+            ip = clean_ip(m[1] or m[2])
+            if ip and ip not in ('0.0.0.0', '::') and not ip.startswith('127.') and ip != '::1':
+                self.server_ips_auto.add(ip)
+            return
         for kind, rx in self.SSH_RX:
             m = rx.match(msg) if kind != 'maxauth' else rx.search(msg)
             if not m:
@@ -1588,6 +1837,35 @@ class Analyzer:
                                  + human_bytes(size), kind='ftp_xfer', user=user, ip=ip, cmd=path, src=rp, line=i, raw=raw)
             self.source(rp, 'FTP', before)
 
+    def scan_known_hosts(self):
+        for p in self.paths('root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*'):
+            rp = self.rel(p)
+            parts = rp.strip('/').split('/')
+            user = 'root' if parts[0] == 'root' else parts[1]
+            f = self.safe_open(p)
+            if not f:
+                continue
+            hosts, hashed = [], 0
+            with f:
+                for line in f:
+                    t = line.split()
+                    if not t or t[0].startswith('#'):
+                        continue
+                    if t[0].startswith('@'):
+                        t = t[1:]
+                    if not t:
+                        continue
+                    if t[0].startswith('|1|'):
+                        hashed += 1
+                        continue
+                    for h in t[0].split(','):
+                        m = re.match(r'^\[([^\]]+)\]:(\d+)$', h)
+                        host, port = (m[1], m[2]) if m else (h, '22')
+                        if [host.lower(), port] not in hosts:
+                            hosts.append([host.lower(), port])
+            self.known_hosts.append({'path': rp, 'user': user, 'hosts': hosts, 'hashed': hashed})
+            self.sources.append({'path': rp, 'kind': 'known_hosts', 'events': 0})
+
     def ftp_ts(self, toks):
         try:
             return dt.datetime.strptime(' '.join(toks), '%a %b %d %H:%M:%S %Y').replace(tzinfo=self.tz).timestamp()
@@ -1836,13 +2114,129 @@ class Analyzer:
             ips.append(p)
         ips.sort(key=lambda p: -p['score'])
 
-        out_events = []
+        # 접속 방향: ⬇ 들어온 접속(다른 곳 → 이 서버) / ⬆ 나간 접속(이 서버 → 다른 곳)
+        self_ips = set(self.server_ips) | self.server_ips_auto
+        outs = []
         for e in ev:
-            if e.get('hidden'):
+            if e.get('cmd') and e.get('via') and 'DB 히스토리' not in (e.get('tags') or []):
+                t = outbound_targets(e['cmd'])
+                if t:
+                    e['dest'], e['dir'] = t, 'out'
+                    if e['ts'] is not None:
+                        outs.append(e)
+            elif e.get('ip') and not e.get('ip_inferred') and not e.get('via'):
+                e['dir'] = 'in'
+        # 서버가 자기 자신에게 SSH 로 다시 들어온 경우: 직전에 ssh 를 실행한 세션과 연결
+        for e in ev:
+            if e.get('kind') != 'login_ok' or e['ts'] is None:
                 continue
+            ip = e.get('ip') or ''
+            cands = [o for o in outs if e['ts'] - 120 <= o['ts'] <= e['ts'] + 2 and o.get('sid') != e.get('sid')
+                     and any(d['proto'] in ('ssh', 'sftp', 'scp', 'rsync') and
+                             (d['host'] == ip or host_kind(d['host'], self_ips) == 'self') for d in o['dest'])]
+            if host_kind(ip, self_ips) == 'self' or any(d['host'] == ip for o in cands for d in o['dest']):
+                self_ips.add(ip) if ip not in LOOPBACK and not ip.startswith('127.') else None
+                e['self_origin'] = True
+                e.setdefault('tags', []).append('서버 내부에서 출발')
+                s = sessions.get(e.get('sid'))
+                if s:
+                    s['self_origin'] = True
+                if cands:
+                    o = cands[-1]
+                    e['origin'] = o
+                    if s:
+                        s['origin_sid'] = o.get('sid')
+        for e in ev:
+            for d in e.get('dest', []):
+                d['kind'] = host_kind(d['host'], self_ips)
+
+        out_events, index = [], {}
+        for e in ev:
+            if not e.get('hidden'):
+                index[id(e)] = len(out_events)
+                out_events.append(e)
+        for n, e in enumerate(out_events):
+            o = e.get('origin')
             e = {k: v for k, v in e.items() if k not in ('seq', 'argv0', 'hidden', 'dup', 'users')}
+            if o:
+                e['origin'] = {'i': index.get(id(o)), 'sid': o.get('sid'), 'ip': o.get('ip'), 'cmd': o.get('cmd')}
             annotate(e)
-            out_events.append(e)
+            out_events[n] = e
+
+        # 파일 작업
+        for e in out_events:
+            ops = []
+            if e.get('cmd') and e.get('via') and 'DB 히스토리' not in (e.get('tags') or []):
+                ops = file_ops(e['cmd'], e.get('cwd'))
+            elif e.get('kind') == 'sftp_xfer' and e.get('path'):
+                ops = [{'op': '외부로 유출' if '다운로드' in e['msg'] else '외부에서 반입', 'path': e['path'],
+                        'how': f'SFTP {"다운로드" if "다운로드" in e["msg"] else "업로드"} {human_bytes(e.get("bytes", 0))}'}]
+            elif e.get('kind') == 'sftp_op' and e.get('cmd'):
+                op = {'remove': '삭제', 'rename': '이동', 'mkdir': '생성', 'rmdir': '삭제'}.get(e['msg'].split()[-1])
+                src, _, to = e['cmd'].partition(' → ')
+                if op:
+                    ops = [{'op': op, 'path': src, 'how': 'SFTP ' + e['msg'].split()[-1], **({'to': to} if to else {})}]
+            elif e.get('kind') == 'ftp_xfer' and e.get('cmd'):
+                ops = [{'op': '외부로 유출' if '다운로드' in e['msg'] else '외부에서 반입', 'path': e['cmd'], 'how': 'FTP'}]
+            if ops:
+                if e['cat'] == 'db':
+                    for f in ops:
+                        if f['op'] == '저장':
+                            f['how'] = 'DB 덤프 결과 저장'
+                e['files'] = ops
+        fagg = {}
+        for n, e in enumerate(out_events):
+            for f in e.get('files', []):
+                for path, op in ((f['path'], f['op']), (f.get('to'), '이동해 온 곳' if f['op'] == '이동' else '복사본')):
+                    if not path:
+                        continue
+                    a = fagg.setdefault(path, {'path': path, 'ops': [], 'sev': 'info', 'flags': []})
+                    a['ops'].append({'i': n, 'ts': e['ts'], 'op': op, 'how': f['how'], 'user': e.get('user'),
+                                     'sid': e.get('sid'), **({'to': f['to']} if f.get('to') and path == f['path'] else {}),
+                                     **({'from': f['path']} if path == f.get('to') else {})})
+                    if SEV_RANK[e['sev']] > SEV_RANK[a['sev']]:
+                        a['sev'] = e['sev']
+        for a in fagg.values():
+            a['ops'].sort(key=lambda o: (o['ts'] is None, o['ts'] or 0, o['i']))
+            kinds = {o['op'] for o in a['ops']}
+            if '외부로 유출' in kinds:
+                a['flags'].append('유출')
+            if '삭제' in kinds:
+                a['flags'].append('삭제됨' if a['ops'][-1]['op'] == '삭제' else '삭제 기록')
+            if HIDDEN_RX.search(a['path']):
+                a['flags'].append('숨김 경로')
+        file_list = sorted(fagg.values(), key=lambda a: (-('유출' in a['flags']), -SEV_RANK[a['sev']], -len(a['ops']), a['path']))
+
+        # 나간 접속 목적지 요약
+        agg = {}
+        for n, e in enumerate(out_events):
+            for d in e.get('dest', []):
+                a = agg.setdefault(d['host'], {'host': d['host'], 'kind': d['kind'], 'ports': [], 'whats': Counter(),
+                                               'count': 0, 'first': None, 'last': None, 'users': [], 'sessions': [],
+                                               'src_ips': [], 'events': [], 'sev': 'info', 'known_by': []})
+                a['count'] += 1
+                a['whats'][d['what']] += 1
+                for key, val in (('ports', d.get('port')), ('users', e.get('user')), ('sessions', e.get('sid')), ('src_ips', e.get('ip'))):
+                    if val and val not in a[key]:
+                        a[key].append(val)
+                if e['ts'] is not None:
+                    a['first'] = e['ts'] if a['first'] is None else min(a['first'], e['ts'])
+                    a['last'] = e['ts'] if a['last'] is None else max(a['last'], e['ts'])
+                a['events'].append(n)
+                if SEV_RANK[e['sev']] > SEV_RANK[a['sev']]:
+                    a['sev'] = e['sev']
+        for kh in self.known_hosts:
+            for host, port in kh['hosts']:
+                a = agg.setdefault(host, {'host': host, 'kind': host_kind(host, self_ips), 'ports': [port], 'whats': Counter(),
+                                          'count': 0, 'first': None, 'last': None, 'users': [], 'sessions': [],
+                                          'src_ips': [], 'events': [], 'sev': 'info', 'known_by': []})
+                if kh['user'] not in a['known_by']:
+                    a['known_by'].append(kh['user'])
+        outbound = sorted(agg.values(), key=lambda a: (-SEV_RANK[a['sev']], -a['count'], a['host']))
+        for a in outbound:
+            a['whats'] = a['whats'].most_common()
+        for p in ips:
+            p['self'] = host_kind(p['ip'], self_ips) == 'self'
         tss = [e['ts'] for e in out_events if e['ts'] is not None]
         off = self.tz.utcoffset(dt.datetime.now()).total_seconds() / 60
         return {
@@ -1851,13 +2245,17 @@ class Analyzer:
                 'root': self.root, 'hosts': [h for h, _ in self.hosts.most_common(5)],
                 'tz_offset_min': off, 'tz_label': 'UTC' + ('+' if off >= 0 else '-') + f'{int(abs(off)) // 60:02d}:{int(abs(off)) % 60:02d}',
                 'range': [min(tss), max(tss)] if tss else None,
-                'sources': self.sources, 'notes': self.notes, 'version': '1.0',
+                'sources': self.sources, 'notes': self.notes, 'version': '1.1',
+                'server_ips': sorted(self.server_ips | self.server_ips_auto), 'server_ips_auto': sorted(self.server_ips_auto),
             },
             'cats': CATS,
             'events': out_events,
             'sessions': slist,
             'ips': ips,
             'histories': self.histories,
+            'outbound': outbound,
+            'files': file_list,
+            'known_hosts': self.known_hosts,
         }
 
 
@@ -1875,7 +2273,7 @@ def empty_data(tz):
 
 # ───────────────────────── 웹 업로드 ─────────────────────────
 # 브라우저에서 올린 파일(개별 파일, 폴더, zip/tar.gz)을 임시 디렉터리에 / 구조로 배치한 뒤 Analyzer 로 분석한다.
-SCAN_GLOBS = ['var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
+SCAN_GLOBS = ['root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*', 'var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
               'root/.*_history', 'root/.history', 'home/*/.*_history', 'home/*/.history', 'var/lib/*/.*_history',
               'srv/*/.*_history', 'var/log/mysql/*.log*', 'var/log/mysql*.log*', 'var/log/mariadb/*.log*',
               'var/lib/mysql/*.log', 'var/log/postgresql/*.log*', 'var/lib/pgsql/*.log', 'var/lib/postgresql/*.log',
@@ -1946,7 +2344,7 @@ def place_target(name, path, n):
             user = None
         return f'home/{user}/.{m[1]}_history' if user else f'root/.{m[1]}_history'
     for rx, d in ((r'^(?:auth\.log|secure)', 'var/log/'), (r'^audit\.log', 'var/log/audit/'), (r'^[wb]tmp', 'var/log/'),
-                  (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/')):
+                  (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/'), (r'^known_hosts', 'root/.ssh/')):
         if re.match(rx, bl):
             return d + b + gzs
     # 3) 내용 (messages, syslog, 이름이 바뀐 파일 등)
@@ -2039,15 +2437,15 @@ class UploadJob:
         res['skipped'] = res['skipped'][:100]
         return res
 
-    def analyze(self, tz):
-        data = Analyzer(self.root, tz).run()
+    def analyze(self, tz, server_ips=()):
+        data = Analyzer(self.root, tz, server_ips=server_ips).run()
         rename = lambda p: self.names.get(p, p)
         for e in data['events']:
             if e.get('src') in self.names:
                 e['src'] = rename(e['src'])
         for s in data['meta']['sources']:
             s['path'] = rename(s['path'])
-        for h in data['histories']:
+        for h in data['histories'] + data['known_hosts']:
             h['path'] = rename(h['path'])
         data['meta']['root'] = f'웹 업로드 ({len(self.names)}개 파일)'
         return data
@@ -2113,7 +2511,7 @@ def serve(data, bind, port, open_browser=False):
                 except argparse.ArgumentTypeError:
                     tz = tz_from_str('local')
                 t0 = time.time()
-                data = job.analyze(tz)
+                data = job.analyze(tz, re.split(r'[,\s]+', q.get('server_ip', [''])[0]))
                 # 직전 결과에 이어서 올릴 수 있도록 이번 작업 폴더는 남기고, 그 전 작업은 정리
                 old = state.get('job')
                 if old and old != job_id and old in jobs:
@@ -2158,6 +2556,7 @@ def main():
                     help='syslog 시각의 시간대 (예: +09:00, UTC). 기본은 이 PC 시간대')
     ap.add_argument('--year', type=int, help='연도가 없는 syslog 의 연도 (기본: 파일 수정시각으로 추정)')
     ap.add_argument('--since', help='이 시각 이후만 (예: 2026-10-01 또는 2026-10-01T02:00)')
+    ap.add_argument('--server-ip', default='', help='분석 대상 서버 자신의 IP (쉼표로 여러 개). 자기 자신에서 출발한 접속을 구분')
     ap.add_argument('--audit-all', action='store_true', help='auditd 에서 로그인 세션이 없는(데몬) 명령도 포함')
     ap.add_argument('--no-journal', action='store_true', help='auth 로그가 없어도 journalctl 을 쓰지 않음')
     ap.add_argument('--serve', nargs='?', const=8080, type=int, metavar='PORT',
@@ -2186,7 +2585,7 @@ def main():
         print('[!] root 가 아니면 auth.log / audit.log / btmp 를 못 읽을 수 있습니다. sudo 로 실행을 권장합니다.')
 
     t0 = time.time()
-    an = Analyzer(a.root, a.tz, a.year, a.audit_all, not a.no_journal, since)
+    an = Analyzer(a.root, a.tz, a.year, a.audit_all, not a.no_journal, since, re.split(r'[,\s]+', a.server_ip))
     data = an.run()
     with open(a.output, 'w', encoding='utf-8') as f:
         f.write(render_html(data))
@@ -2221,7 +2620,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   --crit:#ff4d5e;--high:#ff9a3d;--med:#e9c04a;--low:#58a6ff;--info:#6b7787;
   --crit-bg:rgba(255,77,94,.10);--high-bg:rgba(255,154,61,.07);
   --c-auth:#5b9dff;--c-session:#8f86f0;--c-cmd:#94a3b8;--c-db:#ff5f9e;--c-transfer:#ff9a3d;
-  --c-persist:#c78bff;--c-antiforensic:#ff4d5e;--c-exec:#f97316;--c-privesc:#e9c04a;--c-recon:#34c47c;
+  --c-persist:#c78bff;--c-antiforensic:#ff4d5e;--c-exec:#f97316;--c-privesc:#e9c04a;--c-recon:#34c47c;--c-lateral:#22d3ee;--c-fileop:#d6a35c;
   --mono:ui-monospace,"Cascadia Mono","D2Coding",Consolas,"SFMono-Regular",monospace;
   --sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:dark;
@@ -2232,7 +2631,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   --crit:#d92638;--high:#d9690f;--med:#a77d00;--low:#2563eb;--info:#7a8594;
   --crit-bg:rgba(217,38,56,.07);--high-bg:rgba(217,105,15,.05);
   --c-auth:#2563eb;--c-session:#6d5ae6;--c-cmd:#64748b;--c-db:#d6337a;--c-transfer:#d9690f;
-  --c-persist:#9a4ee0;--c-antiforensic:#d92638;--c-exec:#c2410c;--c-privesc:#a77d00;--c-recon:#15803d;
+  --c-persist:#9a4ee0;--c-antiforensic:#d92638;--c-exec:#c2410c;--c-privesc:#a77d00;--c-recon:#15803d;--c-lateral:#0e7490;--c-fileop:#92400e;
   color-scheme:light;
 }
 *{box-sizing:border-box}
@@ -2262,8 +2661,8 @@ h2 small{font-weight:500;color:var(--muted);font-size:12.5px;margin-left:6px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
 .grid2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:1000px){.grid2{grid-template-columns:1fr}}
-.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:16px}
-@media (max-width:1100px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+
 @media (max-width:560px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;position:relative;overflow:hidden}
 .kpi:hover{border-color:var(--faint)}
@@ -2377,6 +2776,69 @@ pre.raw{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var
 .ex-chk b{color:var(--high);margin-right:4px}
 .flow .expl{margin-top:4px}
 .flow .ex-sum,.sline .ex-sum{background:none;padding:0;color:var(--muted);font-size:12.5px}
+/* 방향 · 파일 */
+.thsub{font-weight:500;color:var(--faint);font-size:11px;margin-left:4px}
+.dir{white-space:nowrap;font-family:var(--mono);font-size:12.5px;line-height:1.6}
+.dir .arr,.arr{font-family:var(--sans);font-weight:700;margin-right:4px}
+.dir.in .arr,.arr.in{color:var(--c-auth)}
+.dir.out .arr,.arr.out{color:var(--c-lateral)}
+.dir.via{color:var(--faint);font-size:11.5px}
+.dir.via a{color:var(--muted)}
+.badge.self{color:var(--c-session);border-color:color-mix(in srgb,var(--c-session) 45%,transparent);background:color-mix(in srgb,var(--c-session) 10%,transparent)}
+.origin{margin-top:5px;font-size:12.5px;color:var(--c-session);cursor:pointer}
+.origin:hover{text-decoration:underline}
+.origin code{display:inline!important;margin:0!important;white-space:normal}
+.origin.warn{cursor:default;text-decoration:none}
+.fops{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.fop{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:1px 7px;border-radius:5px;border:1px solid var(--line);background:var(--panel2);color:var(--text);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none!important}
+a.fop{cursor:pointer}
+.fop .fi{font-size:11px;opacity:.9}
+.fop.out{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent);background:var(--crit-bg)}
+.fop.del{color:var(--high);border-color:color-mix(in srgb,var(--high) 40%,transparent);background:var(--high-bg)}
+.fop.in{color:var(--c-lateral);border-color:color-mix(in srgb,var(--c-lateral) 40%,transparent)}
+.fop.exec{color:var(--c-exec);border-color:color-mix(in srgb,var(--c-exec) 40%,transparent)}
+.fop.mv,.fop.cp{color:var(--c-fileop);border-color:color-mix(in srgb,var(--c-fileop) 40%,transparent)}
+.fop.read,.fop.perm{color:var(--c-privesc)}
+.srvbar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-bottom:12px}
+.srvbar .search{flex:0 1 300px}
+.hint{font-size:12.5px;color:var(--muted)}
+.dflow{display:grid;grid-template-columns:minmax(0,1fr) 28px minmax(170px,240px) 28px minmax(0,1fr);gap:10px;align-items:center;margin-bottom:6px}
+.dh{font-weight:700;font-size:13.5px;display:flex;flex-direction:column}
+.dh small{font-weight:500;color:var(--muted);font-size:11.5px}
+.dnode{display:flex;justify-content:space-between;gap:8px;align-items:baseline;padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-top:6px;background:var(--panel2);color:var(--text);text-decoration:none!important;font-size:13px}
+.dnode small{color:var(--muted);font-size:11.5px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dnode.hot{border-color:color-mix(in srgb,var(--crit) 55%,transparent)}
+.dnode:hover{border-color:var(--accent)}
+.dnone{color:var(--faint);font-size:12.5px;margin-top:8px}
+.darrow{text-align:center;font-size:22px;color:var(--faint)}
+.dserver{border:2px solid var(--accent);border-radius:12px;padding:14px;text-align:center;background:var(--accent-bg);display:grid;gap:2px}
+.dserver small{color:var(--muted);font-size:11.5px}
+.dserver .mono{font-weight:700;font-size:14px;word-break:break-all}
+.dself{margin-top:6px;font-size:12px;color:var(--c-session)}
+@media (max-width:860px){.dflow{grid-template-columns:1fr}.darrow{transform:rotate(90deg)}}
+h2.sect{margin:22px 0 10px;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
+h2.sect small{margin:0}
+.cmds{margin-top:8px;display:grid;gap:3px}
+.cmds a{display:grid;grid-template-columns:62px minmax(0,1fr);gap:6px;font-size:12px;color:var(--text);text-decoration:none!important;padding:2px 4px;border-radius:5px}
+.cmds a:hover{background:var(--panel2)}
+.cmds .t{color:var(--muted)}
+.cmds code{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleg{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,max-content) minmax(90px,1fr));gap:4px 8px;margin-top:10px;align-items:center}
+.fleg .fl{font-size:12px;color:var(--muted)}
+.fcard{margin-bottom:10px}
+.fcard.hot{border-color:color-mix(in srgb,var(--crit) 50%,transparent)}
+.fcard.focus{outline:2px solid var(--accent)}
+.fh{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+.fpath{font-weight:700;font-size:14px;word-break:break-all}
+.ftl{list-style:none;margin:10px 0 0 6px;padding:0;border-left:2px solid var(--line)}
+.ftl li{display:grid;grid-template-columns:110px max-content minmax(0,1fr) max-content;gap:10px;align-items:center;padding:5px 8px 5px 14px;position:relative;cursor:pointer;font-size:13px;border-radius:0 6px 6px 0}
+.ftl li::before{content:"";position:absolute;left:-6px;top:50%;margin-top:-5px;width:10px;height:10px;border-radius:50%;background:var(--panel);border:2px solid var(--faint)}
+.ftl li:hover{background:var(--panel2)}
+.ftl .t{color:var(--muted);font-size:12px}
+.ftl .fop{justify-self:start}
+.ftl .how{color:var(--muted);min-width:0;word-break:break-all}
+.ftl .fwho{color:var(--faint);font-size:12px}
+@media (max-width:640px){.ftl li{grid-template-columns:auto minmax(0,1fr)}.ftl .how{grid-column:1/-1}.ftl .fwho{display:none}}
 /* 히스토리 */
 .hgrid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:860px){.hgrid{grid-template-columns:1fr}}
@@ -2461,7 +2923,11 @@ const sr = s => SEVS.indexOf(s);
 let D, E, CATS, M, bySid, SESS, OFF, HIST, bySrcLine;
 const up = { server:null, busy:false, items:[], msg:'', err:'', job:null, append:true };
 const hv = { file:0, q:'', risky:false };
-const st = { view:'overview', cats:new Set(), minSev:0, q:'', ip:null, user:null, sid:null, limit:300, open:new Set(), hideNoise:true, explain:true };
+const st = { view:'overview', cats:new Set(), minSev:0, q:'', ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', limit:300, open:new Set(), hideNoise:true, explain:true };
+const fv = { q:'', only:false, focus:null };
+let SERVER_IPS = [];
+function loadServerIps(){ let v=null; try{ v=localStorage.getItem('secview-server-ip'); }catch(_){} SERVER_IPS = (v!=null && v!=='' ? v : (M.server_ips||[]).join(',')).split(/[\s,]+/).filter(Boolean); }
+const isSelf = ip => !!ip && (ip==='localhost' || ip==='::1' || ip.startsWith('127.') || SERVER_IPS.includes(ip));
 try{ st.explain = localStorage.getItem('secview-explain')!=='0'; }catch(_){}
 function load(data){
   D = data; E = D.events; CATS = D.cats; M = D.meta; OFF = M.tz_offset_min;
@@ -2474,7 +2940,8 @@ function load(data){
   hv.q = ''; hv.risky = false;
   const risk = HIST.map(h=>h.entries.filter(([ln])=>{ const e=bySrcLine[h.path+':'+ln]; return e && sr(e.sev)>=3; }).length);
   hv.file = risk.length ? risk.indexOf(Math.max(...risk)) : 0;
-  Object.assign(st, { view: E.length ? 'overview' : 'upload', cats:new Set(Object.keys(CATS)), minSev:0, q:'', ip:null, user:null, sid:null, limit:300, open:new Set() });
+  loadServerIps(); fv.q=''; fv.focus=null;
+  Object.assign(st, { view: E.length ? 'overview' : 'upload', cats:new Set(Object.keys(CATS)), minSev:0, q:'', ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', limit:300, open:new Set() });
 }
 load(JSON.parse(document.getElementById('secview-data').textContent));
 try{ const t=localStorage.getItem('secview-theme'); if(t) document.documentElement.dataset.theme=t; }catch(_){}
@@ -2492,6 +2959,35 @@ const HOT = /유출|백도어|무차별|덤프|흔적|변조|UID 0/;
 const tagsH = e => (e.tags||[]).map(t=>`<span class="tag${HOT.test(t)?' hot':''}">${esc(t)}</span>`).join('');
 const ipH = e => e.ip ? `<a data-act="ip" data-v="${esc(e.ip)}" class="${e.ip_inferred?'inferred':''}" title="${e.ip_inferred?'세션 시간대로 추정한 IP':''}">${esc(e.ip)}</a>` : '';
 const isNoise = e => e.sev==='info' && (e.cat==='session' || e.cat==='auth');
+function hostBadge(h, kind){
+  if(isSelf(h) || kind==='self') return '<span class="badge self">이 서버 자신</span>';
+  let k = kind; if(!k){ k = /^\d+\.\d+\.\d+\.\d+$/.test(h) ? (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)?'private':'public') : (h.includes(':')?'public':'domain'); }
+  return {private:'<span class="badge">내부망</span>', public:'<span class="badge">외부</span>', domain:'<span class="badge">도메인</span>'}[k]||'';
+}
+/* IP 칸: ⬇ 들어온 접속의 출발지 / ⬆ 나간 접속의 목적지 / 명령을 실행한 세션의 출발지 */
+function ipCell(e){
+  let h = '';
+  (e.dest||[]).forEach(d=>{ h += `<div class="dir out" title="이 서버에서 나간 연결의 목적지"><span class="arr">⬆</span><a data-act="dest" data-v="${esc(d.host)}">${esc(d.host)}${d.port&&d.port!=='22'?':'+esc(d.port):''}</a>${isSelf(d.host)?' <span class="badge self">자신</span>':''}</div>`; });
+  if(e.ip){
+    if(e.dir==='in') h += `<div class="dir in" title="이 서버로 들어온 접속의 출발지(접속해 온 쪽)"><span class="arr">⬇</span>${ipH(e)}${isSelf(e.ip)?' <span class="badge self">자신</span>':''}</div>`;
+    else h += `<div class="dir via" title="이 명령을 실행한 세션이 어디서 들어왔는지">세션 ⬇ ${ipH(e)}</div>`;
+  }
+  return h;
+}
+const whoTxt = e => [e.user ? esc(e.user) : '', (e.dest||[]).map(d=>'⬆ '+esc(d.host)).join(' '), e.ip ? (e.dir==='in'?'⬇ ':'세션 ⬇ ')+esc(e.ip) : ''].filter(Boolean).join(' · ');
+function originH(e){
+  if(e.origin) return `<div class="origin" data-act="ev" data-v="${e.origin.i}">↪ 실제 출발: 세션 ${esc(e.origin.sid||'?')}${e.origin.ip?` (⬇ ${esc(e.origin.ip)})`:''} 에서 <code>${esc(e.origin.cmd||'')}</code> 실행</div>`;
+  if(e.self_origin || (e.kind==='login_ok' && isSelf(e.ip))) return `<div class="origin warn">↪ 서버 안에서 출발한 접속 — 출발지 IP 는 공격자 위치가 아닙니다. 같은 시각의 다른 세션·웹셸·cron 을 확인하세요</div>`;
+  return '';
+}
+const FOP = {'외부로 유출':['out','⇪'],'외부에서 반입':['in','⇩'],'내려받아 저장':['in','⇩'],'삭제':['del','✕'],'이동':['mv','➜'],'이동해 온 곳':['mv','➜'],
+  '복사':['cp','⧉'],'복사본':['cp','⧉'],'저장':['save','💾'],'생성':['new','+'],'압축 생성':['zip','▣'],'압축에 포함':['zip','▣'],'압축 해제':['zip','▢'],
+  '실행':['exec','▶'],'권한 변경':['perm','🔑'],'시각 위조':['perm','🕒'],'열람':['read','👁']};
+function fopB(op, path, to, how){
+  const [k, ic] = FOP[op] || ['cp','•'];
+  return `<a class="fop ${k}" data-act="file" data-v="${esc(path)}" title="${esc(how||'')}"><span class="fi">${ic}</span>${esc(op)} <span class="mono">${esc(path)}</span>${to?` → <span class="mono">${esc(to)}</span>`:''}</a>`;
+}
+const filesH = e => e.files ? `<div class="fops">${e.files.map(f=>fopB(f.op, f.path, f.to, f.how)).join('')}</div>` : '';
 /* 해설: full=true 면 옵션 설명·확인할 것까지, false 면 요약 문장만 */
 function explH(e, full){
   if(!st.explain) return '';
@@ -2526,7 +3022,7 @@ $('#theme').onclick = ()=>{
 if(!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.dataset.theme='light';
 
 function renderNav(){
-  const VIEWS = [['overview','개요'],['timeline','타임라인',E.length],['ips','공격자 IP',D.ips.length],['sessions','세션',D.sessions.length],
+  const VIEWS = [['overview','개요'],['timeline','타임라인',E.length],['ips','접속 방향',D.ips.length+(D.outbound||[]).length],['sessions','세션',D.sessions.length],['files','파일 추적',(D.files||[]).length],
     ['history','히스토리',HIST.length],['sources','로그 소스',M.sources.length],['guide','로그 가이드'],['upload','⤒ 로그 불러오기']];
   $('#nav').innerHTML = VIEWS.map(([k,l,n])=>`<button data-act="view" data-v="${k}" class="${st.view===k?'on':''}">${l}${n!=null?`<span class="n">${n.toLocaleString()}</span>`:''}</button>`).join('');
 }
@@ -2616,7 +3112,7 @@ async function uploadAll(list){
     if(!appending && !up.items.some(it=>it.placed && it.placed.length)) throw new Error('분석할 수 있는 로그가 없습니다. 아래 표의 파일을 올려주세요.');
     if(appending && !up.items.some(it=>it.placed && it.placed.length)) throw new Error('새로 추가된 로그가 없습니다. (이미 올린 파일이거나 분석 대상이 아닌 파일)');
     up.msg='분석 중…'; render();
-    const r = await fetch(`/api/analyze?job=${job}&tz=${encodeURIComponent(up.tz)}`, {method:'POST'});
+    const r = await fetch(`/api/analyze?job=${job}&tz=${encodeURIComponent(up.tz)}&server_ip=${encodeURIComponent(SERVER_IPS.join(','))}`, {method:'POST'});
     if(!r.ok) throw new Error('분석 실패 (HTTP '+r.status+')');
     const data = await r.json();
     up.busy=false; up.msg=`${appending?'기존 결과에 추가 · ':''}올린 파일 ${up.items.length}개 → 전체 이벤트 ${data.events.length.toLocaleString()}건`;
@@ -2644,7 +3140,9 @@ function searchText(e){ return e._s || (e._s = [e.msg,e.cmd,e.user,e.ip,e.raw,e.
 function filtered(){
   const q = st.q.trim().toLowerCase();
   return E.filter(e => st.cats.has(e.cat) && sr(e.sev)>=st.minSev && (!st.ip||e.ip===st.ip) && (!st.user||e.user===st.user)
-    && (!st.sid||e.sid===st.sid) && (!st.hideNoise || st.ip || st.sid || !isNoise(e)) && (!q || searchText(e).includes(q)));
+    && (!st.sid||e.sid===st.sid) && (!st.hideNoise || st.ip || st.sid || st.scope==='in' || !isNoise(e)) && (!q || searchText(e).includes(q))
+    && (st.scope==='all' || (st.scope==='in' ? e.dir==='in' : st.scope==='out' ? e.dir==='out' : !!e.files))
+    && (!st.dest || (e.dest||[]).some(d=>d.host===st.dest)) && (!st.fpath || (e.files||[]).some(f=>f.path===st.fpath || f.to===st.fpath)));
 }
 function go(view, f){
   Object.assign(st, {view, limit:300}, f||{}); render(); window.scrollTo(0,0);
@@ -2659,6 +3157,7 @@ function overview(){
   const xfer = E.filter(e=>e.cat==='transfer').length;
   const xferOut = E.filter(e=>e.cat==='transfer' && /유출/.test(e.msg+(e.tags||[]).join())).length;
   const pa = E.filter(e=>e.cat==='persist'||e.cat==='antiforensic').length;
+  const outHosts = (D.outbound||[]).filter(a=>a.count>0 && !isSelf(a.host));
   const K = [
     ['침입 성공 외부 IP', ext.length, ext.slice(0,3).map(p=>p.ip).join(', ')||'없음', '--crit', ()=>go('ips')],
     ['SSH 로그인 실패', fails, `${D.ips.filter(p=>p.fails>=5).length}개 IP 무차별 대입`, '--c-auth', ()=>go('timeline',{cats:new Set(['auth']),minSev:0})],
@@ -2666,6 +3165,8 @@ function overview(){
     ['DB 덤프', dbd, 'mysqldump · pg_dump · OUTFILE', '--c-db', ()=>go('timeline',{cats:new Set(['db']),minSev:0})],
     ['파일 전송', xfer, `유출 의심 ${xferOut}건`, '--c-transfer', ()=>go('timeline',{cats:new Set(['transfer']),minSev:0})],
     ['지속성 · 흔적삭제', pa, '계정 · 키 · cron · history', '--c-persist', ()=>go('timeline',{cats:new Set(['persist','antiforensic']),minSev:0})],
+    ['⬆ 나간 접속 목적지', outHosts.length, outHosts.slice(0,3).map(a=>a.host).join(', ')||'없음', '--c-lateral', ()=>{ go('ips'); setTimeout(()=>{ const el=document.getElementById('outsec'); if(el) el.scrollIntoView({block:'start'}); window.scrollBy(0,-110); },0); }],
+    ['📄 파일 작업', (D.files||[]).length, `유출 ${(D.files||[]).filter(f=>f.flags.includes('유출')).length} · 삭제 ${(D.files||[]).filter(f=>f.flags.some(x=>x.startsWith('삭제'))).length}`, '--c-fileop', ()=>go('files')],
   ];
   window._kpi = K.map(k=>k[4]);
   let h = `<div class="kpis">${K.map((k,i)=>`<button class="kpi${k[1]?'':' zero'}" style="--k:var(${k[3]})" data-act="kpi" data-v="${i}"><div class="l">${k[0]}</div><div class="v">${k[1].toLocaleString()}</div><div class="s">${esc(k[2])}</div></button>`).join('')}</div>`;
@@ -2678,7 +3179,7 @@ function overview(){
     return sep+`<li data-act="ev" data-v="${e._i}" style="--c:var(--c-${e.cat})"><div class="t">${hms(e.ts)}</div><div class="dot"></div><div class="b">
       <div>${catB(e.cat)} <span class="m">${esc(e.msg)}</span></div>
       ${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,false)}
-      <div class="who">${[e.user, e.ip].filter(Boolean).map(esc).join(' · ')}${e.sid?` · 세션 ${esc(e.sid)}`:''} · ${esc(e.src||'')}</div></div></li>`;
+      ${filesH(e)}${originH(e)}<div class="who">${whoTxt(e)}${e.sid?` · 세션 ${esc(e.sid)}`:''} · ${esc(e.src||'')}</div></div></li>`;
   }).join('');
   h += `<div class="grid2"><section class="panel"><h2>공격 흐름 <small>위험도 높음 이상 ${key.length}건, 시간순</small></h2>
     ${key.length?`<ul class="flow">${flow}</ul>${key.length>80?`<a data-act="kpi-high" class="more iconbtn" style="text-align:center">전체 ${key.length}건 타임라인에서 보기</a>`:''}`:'<div class="empty">높은 위험도 이벤트가 없습니다.</div>'}</section>
@@ -2704,9 +3205,10 @@ function sessMini(s){
 function timeline(){
   const cnt = {}; E.forEach(e=>cnt[e.cat]=(cnt[e.cat]||0)+1);
   const rows = filtered();
-  const pills = [['ip','IP'],['user','사용자'],['sid','세션']].filter(([k])=>st[k]).map(([k,l])=>`<span class="pill">${l}: <b class="mono">${esc(st[k])}</b><button data-act="clr" data-v="${k}" aria-label="필터 해제">×</button></span>`).join('');
+  const pills = [['ip','IP'],['user','사용자'],['sid','세션'],['dest','⬆ 목적지'],['fpath','파일']].filter(([k])=>st[k]).map(([k,l])=>`<span class="pill">${l}: <b class="mono">${esc(st[k])}</b><button data-act="clr" data-v="${k}" aria-label="필터 해제">×</button></span>`).join('');
   let h = `<div class="toolbar">
     <input class="search" id="q" placeholder="검색: 명령어, IP, 계정, 파일 경로, 원본 로그…" value="${esc(st.q)}">
+    <select id="scope" title="접속 방향 / 파일 작업으로 좁혀 보기">${[['all','모든 이벤트'],['in','⬇ 들어온 접속 (다른 곳 → 이 서버)'],['out','⬆ 나간 접속 (이 서버 → 다른 곳)'],['file','📄 파일 작업 (저장·이동·삭제·전송)']].map(([v,l])=>`<option value="${v}" ${st.scope===v?'selected':''}>${l}</option>`).join('')}</select>
     <select id="sev">${SEVS.map((s,i)=>`<option value="${i}" ${st.minSev===i?'selected':''}>${i?SEV_L[s]+' 이상':'모든 위험도'}</option>`).join('')}</select>
     <label style="font-size:12.5px;color:var(--muted);display:flex;gap:5px;align-items:center"><input type="checkbox" id="noise" ${st.hideNoise?'checked':''}>접속 잡음 숨김</label>
     <label style="font-size:12.5px;color:var(--muted);display:flex;gap:5px;align-items:center"><input type="checkbox" id="explain" ${st.explain?'checked':''}>명령어 해설 보기</label>
@@ -2715,7 +3217,7 @@ function timeline(){
     ${Object.keys(CATS).map(c=>`<button class="chip ${st.cats.has(c)?'on':''}" data-act="cat" data-v="${c}" style="--c:var(--c-${c})"><i></i>${esc(CATS[c])}<span class="n">${cnt[c]||0}</span></button>`).join('')}</div>
   <div class="toolbar">${pills}<span class="count">${rows.length.toLocaleString()}건${rows.length>st.limit?` 중 ${st.limit.toLocaleString()}건 표시`:''}</span></div>`;
   if(!rows.length) return h+`<div class="tablewrap"><div class="empty">조건에 맞는 이벤트가 없습니다.</div></div>`;
-  h += `<div class="tablewrap"><table><thead><tr><th>시각 (${esc(M.tz_label)})</th><th>위험</th><th>분류</th><th>사용자</th><th>출발지 IP</th><th>내용</th><th>출처</th></tr></thead><tbody>`;
+  h += `<div class="tablewrap"><table><thead><tr><th>시각 (${esc(M.tz_label)})</th><th>위험</th><th>분류</th><th>사용자</th><th>IP <span class="thsub">⬇들어옴 ⬆나감</span></th><th>내용</th><th>출처</th></tr></thead><tbody>`;
   h += rows.slice(0,st.limit).map(rowH).join('');
   h += `</tbody></table></div>`;
   if(rows.length>st.limit) h += `<button class="iconbtn more" data-act="more">더 보기 (+500)</button>`;
@@ -2726,8 +3228,8 @@ function rowH(e){
   return `<tr class="ev ${e.sev}${open?' open':''}" data-act="row" data-v="${e._i}">
     <td class="t">${fmt(e.ts)}</td><td>${sevB(e.sev)}</td><td>${catB(e.cat)}</td>
     <td>${e.user?`<a data-act="user" data-v="${esc(e.user)}">${esc(e.user)}</a>`:''}</td>
-    <td class="ipc">${ipH(e)}</td>
-    <td class="m"><div class="msg">${esc(e.msg)}</div>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,true)}<div>${tagsH(e)}</div></td>
+    <td class="ipc">${ipCell(e)}</td>
+    <td class="m"><div class="msg">${esc(e.msg)}</div>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${originH(e)}${filesH(e)}${explH(e,true)}<div>${tagsH(e)}</div></td>
     <td class="src">${esc(e.src||'')}${e.line?':'+e.line:''}</td></tr>`
     + (open?`<tr class="detail"><td colspan="7">${detailH(e)}</td></tr>`:'');
 }
@@ -2749,29 +3251,84 @@ function detailH(e){
 function csv(){
   const rows = filtered();
   const q = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
-  const out = ['시각,위험,분류,사용자,IP,세션,내용,명령/대상,해설,태그,출처'].concat(rows.map(e=>[fmt(e.ts),SEV_L[e.sev],CATS[e.cat],e.user,e.ip,e.sid,e.msg,e.cmd,explText(e),(e.tags||[]).join(' | '),(e.src||'')+(e.line?':'+e.line:'')].map(q).join(',')));
+  const out = ['시각,위험,분류,사용자,방향,IP,목적지,세션,내용,명령/대상,파일 작업,해설,태그,출처'].concat(rows.map(e=>[fmt(e.ts),SEV_L[e.sev],CATS[e.cat],e.user,e.dir==='in'?'들어옴':e.dir==='out'?'나감':'',e.ip,(e.dest||[]).map(d=>d.host).join(' '),e.sid,e.msg,e.cmd,(e.files||[]).map(f=>f.op+' '+f.path+(f.to?' → '+f.to:'')).join(' | '),explText(e),(e.tags||[]).join(' | '),(e.src||'')+(e.line?':'+e.line:'')].map(q).join(',')));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['\ufeff'+out.join('\r\n')],{type:'text/csv'}));
   a.download = 'secview_events.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
 }
 
-/* ── 공격자 ── */
+/* ── 접속 방향 ── */
+function inCard(p, max){
+  const self = isSelf(p.ip), hot = p.ok && !p.private && !self;
+  const cats = Object.entries(p.cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`${catB(c)} <span style="font-size:12px;color:var(--muted)">${n}</span>`).join(' ');
+  return `<div class="card${hot?' hot':''}" id="ip-${esc(p.ip)}">
+    <h3><span class="arr in">⬇</span>${esc(p.ip)} ${hostBadge(p.ip, p.private?'private':'public')}${!self&&p.ok&&p.fails>=3?'<span class="badge red">무차별 대입 성공</span>':!self&&p.ok&&!p.private?'<span class="badge red">외부에서 로그인 성공</span>':p.ok?'<span class="badge">로그인 성공</span>':p.fails>=5?'<span class="badge">무차별 대입</span>':''}</h3>
+    ${self?'<div class="row" style="color:var(--c-session)">이 서버 안에서 출발한 접속입니다. 실제로 누가 시작했는지는 세션 화면의 ↪ 표시(직전에 ssh 를 실행한 세션)를 확인하세요.</div>':''}
+    <div class="score" title="위험 점수 ${p.score}"><i style="width:${Math.max(2,p.score/max*100)}%"></i></div>
+    <div class="stats"><div><b>${p.fails.toLocaleString()}</b><span>로그인 실패</span></div><div><b style="${p.ok&&!self?'color:var(--crit)':''}">${p.ok}</b><span>로그인 성공</span></div><div><b>${p.sessions.length}</b><span>세션</span></div></div>
+    ${p.ok_users.length?`<div class="row">성공 계정 <b class="mono" style="${self?'':'color:var(--crit)'}">${p.ok_users.map(esc).join(', ')}</b></div>`:''}
+    ${p.tried.length?`<div class="row">시도 계정 <b class="mono">${p.tried.slice(0,8).map(([u,n])=>esc(u)+(n?`(${n})`:'')).join(', ')}${p.tried.length>8?' …':''}</b></div>`:''}
+    <div class="row">최초 <b class="mono">${fmt(p.first)}</b></div><div class="row">최종 <b class="mono">${fmt(p.last)}</b></div>
+    ${cats?`<div class="row" style="margin-top:8px">${cats}</div>`:''}
+    <div class="acts"><button class="iconbtn" data-act="ip" data-v="${esc(p.ip)}">타임라인</button>${p.sessions.length?`<button class="iconbtn" data-act="ipsess" data-v="${esc(p.ip)}">세션 ${p.sessions.length}개</button>`:''}</div></div>`;
+}
+function outCard(a){
+  return `<div class="card${sr(a.sev)>=4&&!isSelf(a.host)?' hot':''}" id="dest-${esc(a.host)}">
+    <h3><span class="arr out">⬆</span>${esc(a.host)} ${hostBadge(a.host, a.kind)} ${a.count?sevB(a.sev):''}</h3>
+    <div class="row" style="margin-top:8px">한 일 ${a.whats.map(([w,n])=>`<span class="tag${/유출|업로드|리버스|터널/.test(w)?' hot':''}">${esc(w)}${n>1?' ×'+n:''}</span>`).join('')||'<span class="tag">명령 기록 없음</span>'}</div>
+    ${a.ports.length?`<div class="row">포트 <b class="mono">${a.ports.map(esc).join(', ')}</b></div>`:''}
+    ${a.users.length?`<div class="row">실행 계정 <b class="mono">${a.users.map(esc).join(', ')}</b></div>`:''}
+    ${a.src_ips.length?`<div class="row">명령을 친 세션의 출발지 <b class="mono">⬇ ${a.src_ips.map(esc).join(', ')}</b></div>`:''}
+    ${a.first!=null?`<div class="row">최초 <b class="mono">${fmt(a.first)}</b>${a.last!==a.first?` · 최종 <b class="mono">${fmt(a.last)}</b>`:''}</div>`:''}
+    ${a.known_by.length?`<div class="row">known_hosts 에 등록됨 (${a.known_by.map(esc).join(', ')} 계정) — 이 서버에서 SSH 로 접속한 적 있는 곳</div>`:''}
+    ${a.events.length?`<div class="cmds">${a.events.slice(0,4).map(i=>`<a data-act="ev" data-v="${i}"><span class="mono t">${E[i].ts!=null?hms(E[i].ts):'시각 미상'}</span><code>${esc(E[i].cmd||'')}</code></a>`).join('')}${a.events.length>4?`<div class="row">외 ${a.events.length-4}건</div>`:''}</div>
+      <div class="acts"><button class="iconbtn" data-act="dest" data-v="${esc(a.host)}">타임라인</button></div>`:''}</div>`;
+}
 function ips(){
-  if(!D.ips.length) return '<div class="panel empty">IP 가 기록된 이벤트가 없습니다.</div>';
-  const max = D.ips[0].score||1;
-  return `<div class="cards">${D.ips.map(p=>{
-    const hot = p.ok && !p.private;
-    const cats = Object.entries(p.cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`${catB(c)} <span style="font-size:12px;color:var(--muted)">${n}</span>`).join(' ');
-    return `<div class="card${hot?' hot':''}" id="ip-${esc(p.ip)}">
-      <h3>${esc(p.ip)} ${p.private?'<span class="badge">내부망</span>':'<span class="badge">외부</span>'}${p.ok&&p.fails>=3?'<span class="badge red">무차별 대입 성공</span>':p.ok?'<span class="badge red">로그인 성공</span>':p.fails>=5?'<span class="badge">무차별 대입</span>':''}</h3>
-      <div class="score" title="위험 점수 ${p.score}"><i style="width:${Math.max(2,p.score/max*100)}%"></i></div>
-      <div class="stats"><div><b>${p.fails.toLocaleString()}</b><span>로그인 실패</span></div><div><b style="${p.ok?'color:var(--crit)':''}">${p.ok}</b><span>로그인 성공</span></div><div><b>${p.sessions.length}</b><span>세션</span></div></div>
-      ${p.ok_users.length?`<div class="row">성공 계정 <b class="mono" style="color:var(--crit)">${p.ok_users.map(esc).join(', ')}</b></div>`:''}
-      ${p.tried.length?`<div class="row">시도 계정 <b class="mono">${p.tried.slice(0,8).map(([u,n])=>esc(u)+(n?`(${n})`:'')).join(', ')}${p.tried.length>8?' …':''}</b></div>`:''}
-      <div class="row">최초 <b class="mono">${fmt(p.first)}</b></div><div class="row">최종 <b class="mono">${fmt(p.last)}</b></div>
-      ${cats?`<div class="row" style="margin-top:8px">${cats}</div>`:''}
-      <div class="acts"><button class="iconbtn" data-act="ip" data-v="${esc(p.ip)}">타임라인</button>${p.sessions.length?`<button class="iconbtn" data-act="ipsess" data-v="${esc(p.ip)}">세션 ${p.sessions.length}개</button>`:''}</div></div>`;
-  }).join('')}</div>`;
+  const ins = D.ips, outs = D.outbound||[];
+  const max = (ins[0]&&ins[0].score)||1;
+  const selfIn = E.filter(e=>e.kind==='login_ok' && (e.self_origin || isSelf(e.ip))).length;
+  const topIn = ins.filter(p=>!isSelf(p.ip)).slice(0,6), topOut = outs.filter(a=>!isSelf(a.host)).slice(0,6);
+  const hashed = (D.known_hosts||[]).reduce((n,k)=>n+k.hashed,0);
+  return `<div class="panel srvbar"><label for="srvip"><b>이 서버 IP</b></label>
+      <input id="srvip" class="search" value="${esc(SERVER_IPS.join(', '))}" placeholder="예: 10.10.40.95 (쉼표로 여러 개)">
+      <span class="hint">${(M.server_ips_auto||[]).length?`로그에서 자동 감지: <span class="mono">${esc(M.server_ips_auto.join(', '))}</span> · `:''}이 IP 로 들어온 접속은 "서버 자신에서 출발"로 따로 표시합니다</span></div>
+    <div class="panel dflow">
+      <div class="dcol"><div class="dh">⬇ 들어온 접속<small>다른 곳 → 이 서버 (auth.log·wtmp·audit)</small></div>
+        ${topIn.map(p=>`<a class="dnode${p.ok&&!p.private?' hot':''}" data-act="ipcard" data-v="${esc(p.ip)}"><span class="mono">${esc(p.ip)}</span><small>${p.ok?`로그인 성공 ${p.ok}`:`실패 ${p.fails}`}</small></a>`).join('')||'<div class="dnone">없음</div>'}</div>
+      <div class="darrow" aria-hidden="true">→</div>
+      <div class="dcol"><div class="dserver"><small>이 서버</small><div class="mono">${esc(SERVER_IPS.join(', ')||M.hosts.join(', ')||'IP 미입력')}</div>${M.hosts.length&&SERVER_IPS.length?`<small>${esc(M.hosts.join(', '))}</small>`:''}
+        ${selfIn?`<div class="dself">↻ 자기 자신에게 다시 접속 ${selfIn}회</div>`:''}</div></div>
+      <div class="darrow" aria-hidden="true">→</div>
+      <div class="dcol"><div class="dh">⬆ 나간 접속<small>이 서버 → 다른 곳 (명령·known_hosts)</small></div>
+        ${topOut.map(a=>`<a class="dnode${sr(a.sev)>=4?' hot':''}" data-act="destcard" data-v="${esc(a.host)}"><span class="mono">${esc(a.host)}</span><small>${esc(a.whats.map(w=>w[0]).join(', ')||'known_hosts')}</small></a>`).join('')||'<div class="dnone">기록 없음</div>'}</div>
+    </div>
+    <h2 class="sect"><span class="arr in">⬇</span> 들어온 접속 <small>다른 곳에서 이 서버로 접속해 온 출발지 IP — auth.log 의 "from IP", wtmp, audit 로그인 기록</small></h2>
+    ${ins.length?`<div class="cards">${ins.map(p=>inCard(p,max)).join('')}</div>`:'<div class="panel empty">들어온 접속 기록이 없습니다.</div>'}
+    <h2 class="sect" id="outsec"><span class="arr out">⬆</span> 나간 접속 <small>이 서버에서 다른 곳으로 연결한 목적지 — auth.log 에는 남지 않아 실행한 명령(히스토리·auditd)과 known_hosts 로 찾았습니다</small></h2>
+    ${outs.length?`<div class="cards">${outs.map(outCard).join('')}</div>`:'<div class="panel empty">이 서버에서 밖으로 나간 연결 기록이 없습니다. (ssh·scp·curl·wget·nc 명령이나 known_hosts 가 있으면 표시됩니다)</div>'}
+    ${hashed?`<p class="hint" style="margin-top:10px">known_hosts 에서 해시로 저장된 항목 ${hashed}개는 주소를 알 수 없습니다 (HashKnownHosts 설정). 서버에서 <span class="mono">ssh-keygen -F 의심IP</span> 로 특정 주소가 있는지는 확인할 수 있습니다.</p>`:''}`;
+}
+
+/* ── 파일 추적 ── */
+function filesView(){
+  const F = D.files||[];
+  if(!F.length) return '<div class="panel empty">파일 작업 기록이 없습니다. (명령 기록·SFTP/FTP 로그에서 저장·이동·삭제·전송을 찾습니다)</div>';
+  const q = fv.q.trim().toLowerCase();
+  let list = F.map((f,i)=>({f,i}));
+  if(fv.only) list = list.filter(({f})=>f.flags.length && f.flags.some(x=>/유출|삭제/.test(x)));
+  if(q) list = list.filter(({f})=>f.path.toLowerCase().includes(q) || f.ops.some(o=>(o.how+' '+(o.to||'')+' '+(o.from||'')).toLowerCase().includes(q)));
+  return `<div class="panel" style="margin-bottom:12px"><h2>파일 추적 <small>파일마다 무슨 일이 있었는지 시간순으로 — 생성·저장 → 압축 → 이동·복사 → 외부 전송 → 삭제</small></h2>
+      <div class="toolbar" style="margin:0"><input class="search" id="fq" placeholder="파일 경로 검색 (예: /tmp, .sql, authorized_keys)" value="${esc(fv.q)}">
+      <label class="tgl"><input type="checkbox" id="fonly" ${fv.only?'checked':''}>유출·삭제된 파일만</label><span class="count">${list.length}개</span></div>
+      <div class="fleg">${Object.entries({'외부로 유출':'서버 밖으로 나감','외부에서 반입':'밖에서 들어옴','저장':'파일로 저장','이동':'옮김/이름 변경','복사':'복사','삭제':'지움','압축 생성':'묶음','실행':'실행','권한 변경':'권한·시각 변경','열람':'민감 파일 열람'}).map(([k,v])=>{ const [c,ic]=FOP[k]; return `<span class="fop ${c}"><span class="fi">${ic}</span>${esc(k)}</span><span class="fl">${esc(v)}</span>`; }).join('')}</div></div>
+    ${list.map(({f,i})=>`<div class="panel fcard${f.flags.includes('유출')?' hot':''}${fv.focus===f.path?' focus':''}" id="file-${i}">
+      <div class="fh"><span class="mono fpath">${esc(f.path)}</span>${f.flags.map(x=>`<span class="badge${/유출|삭제됨/.test(x)?' red':''}">${esc(x)}</span>`).join('')}${sevB(f.sev)}
+        <button class="iconbtn" data-act="fpath" data-v="${esc(f.path)}" style="margin-left:auto">타임라인</button></div>
+      <ol class="ftl">${f.ops.map(o=>{ const [c,ic]=FOP[o.op]||['cp','•']; return `<li data-act="ev" data-v="${o.i}">
+        <span class="t mono">${o.ts!=null?fmt(o.ts).slice(5):'시각 미상'}</span><span class="fop ${c}"><span class="fi">${ic}</span>${esc(o.op)}</span>
+        <span class="how">${esc(o.how)}${o.to?` → <span class="mono">${esc(o.to)}</span>`:''}${o.from?` ← <span class="mono">${esc(o.from)}</span>`:''}</span>
+        <span class="fwho">${esc(o.user||'')}${o.sid?' · '+esc(o.sid):''}</span></li>`; }).join('')}</ol></div>`).join('') || '<div class="panel empty">조건에 맞는 파일이 없습니다.</div>'}`;
 }
 
 /* ── 세션 ── */
@@ -2785,12 +3342,13 @@ function sessions(){
     const hot = sr(s.max_sev)>=4;
     const cats = Object.entries(s.cats).filter(([c])=>c!=='auth').map(([c,n])=>`${catB(c)}<span style="font-size:12px;color:var(--muted);margin:0 6px 0 3px">${n}</span>`).join('');
     return `<details class="sess${hot?' hot':''}" id="sess-${s.id}" ${hot||st.sid===s.id?'open':''}>
-      <summary><span class="mono" style="color:var(--faint)">${s.id}</span><span class="who">${esc(s.user||'?')}@${esc(s.ip||'local')}</span>${sevB(s.max_sev)}
+      <summary><span class="mono" style="color:var(--faint)">${s.id}</span><span class="who">${esc(s.user||'?')}@<span title="이 세션이 들어온 출발지">⬇${esc(s.ip||'local')}</span></span>${sevB(s.max_sev)}
+      ${s.self_origin||isSelf(s.ip)?'<span class="badge self">서버 내부에서 출발</span>':''}${s.origin_sid?`<a class="badge self" data-act="sess" data-v="${s.origin_sid}">↪ ${s.origin_sid} 에서 다시 접속</a>`:''}
       <span class="when">${fmt(s.start)} → ${s.end!=null?hms(s.end):'종료 기록 없음'} · ${dur(s.start, s.end ?? s.last)}</span>
       ${s.method?`<span class="badge">${esc(s.method)}</span>`:''}${s.fails_before>=3?`<span class="badge red">직전 실패 ${s.fails_before}회</span>`:''}
       <span style="font-size:12px;color:var(--faint)">근거: ${esc(s.sources.join(', '))}</span><span>${cats}</span></summary>
       <div class="body">${es.map(e=>`<div class="sline" data-act="ev" data-v="${e._i}"><span class="t">${hms(e.ts)}</span><span class="c">${catB(e.cat)}</span>
-        <span><span class="mm" style="color:var(--${e.sev==='info'?'muted':e.sev})">${esc(e.msg)}</span>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,false)}</span></div>`).join('')||'<div class="empty">연결된 이벤트 없음</div>'}</div></details>`;
+        <span><span class="mm" style="color:var(--${e.sev==='info'?'muted':e.sev})">${esc(e.msg)}</span>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${(e.dest||[]).length?`<div class="dir out" style="font-size:12px"><span class="arr">⬆</span>${e.dest.map(d=>esc(d.host)+' '+esc(d.what)).join(', ')}</div>`:''}${filesH(e)}${explH(e,false)}</span></div>`).join('')||'<div class="empty">연결된 이벤트 없음</div>'}</div></details>`;
   }).join('');
 }
 
@@ -2872,8 +3430,9 @@ const GUIDE = [
     cmd:"grep 'internal-sftp' /var/log/auth.log | grep -E 'open|close'" },
   { k:'etc', name:'계정·설정 파일', files:'/etc/passwd, ~/.ssh/authorized_keys,\ncrontab (/var/spool/cron, /etc/cron*)', kind:null, prio:3,
     what:'로그는 아니지만 공격자가 남긴 백도어가 그대로 있는 곳입니다.',
-    look:['/etc/passwd 의 UID 0 계정 (root 말고 0 이 있으면 백도어)','authorized_keys 에 모르는 키','crontab 에 /tmp 나 숨김 폴더의 스크립트'],
-    limit:'이 뷰어는 /etc/passwd 만 읽습니다. authorized_keys·crontab 은 서버에서 직접 확인하세요.',
+    look:['/etc/passwd 의 UID 0 계정 (root 말고 0 이 있으면 백도어)','authorized_keys 에 모르는 키','crontab 에 /tmp 나 숨김 폴더의 스크립트',
+      'known_hosts → 이 서버에서 SSH 로 "나간" 적 있는 서버 목록 (측면 이동 대상 확인)'],
+    limit:'이 뷰어는 /etc/passwd 와 known_hosts 만 읽습니다. authorized_keys·crontab 은 서버에서 직접 확인하세요. known_hosts 가 해시(|1|…)로 저장돼 있으면 주소를 바로 알 수 없습니다.',
     cmd:"awk -F: '$3==0' /etc/passwd\ncat /root/.ssh/authorized_keys\ncrontab -l; ls -la /etc/cron.*" },
 ];
 function guideView(){
@@ -2884,6 +3443,7 @@ function guideView(){
       <li><b>들어와서 무엇을 했나</b> — 그 접속(세션) 동안 실행된 명령을 셸 히스토리·auditd 로 봅니다. → <a data-act="guidego" data-v="sessions">세션</a> · <a data-act="guidego" data-v="history">히스토리</a></li>
       <li><b>무엇을 가져갔나</b> — DB 덤프, 압축, 업로드·SFTP·scp 다운로드를 찾습니다. → <a data-act="kpi-go" data-v="3">DB 덤프</a> · <a data-act="kpi-go" data-v="4">파일 전송</a></li>
       <li><b>다시 들어올 문을 남겼나</b> — 계정 생성, SSH 키, crontab, 숨김 폴더의 실행 파일. → <a data-act="kpi-go" data-v="5">지속성·흔적삭제</a></li>
+      <li><b>다른 서버로 넘어갔나</b> — 이 서버에서 밖으로 나간 ssh·scp·curl·nc. 들어온 접속(⬇)과 나간 접속(⬆)은 남는 로그가 다릅니다: 들어온 건 auth.log 의 "from IP", 나간 건 실행한 명령과 known_hosts. → <a data-act="guidego" data-v="ips">접속 방향</a> · <a data-act="guidego" data-v="files">파일 추적</a></li>
       <li><b>흔적을 지웠나</b> — history 삭제, 로그 비우기, auth.log 와 wtmp·audit 이 서로 안 맞는 곳.</li>
     </ol></div>`;
   return steps + `<div class="gcards">${GUIDE.map(g=>{
@@ -2911,14 +3471,25 @@ function sources(){
 /* ── 렌더 / 이벤트 ── */
 function render(){
   renderNav();
-  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView}[st.view];
+  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView, files:filesView}[st.view];
   $('#main').innerHTML = v();
   if(st.view==='timeline'){
     const q = $('#q'); let t;
     q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ st.q=q.value; st.limit=300; const pos=q.selectionStart; render(); const n=$('#q'); n.focus(); n.setSelectionRange(pos,pos); },160); };
     $('#sev').onchange = ev=>{ st.minSev=+ev.target.value; render(); };
+    $('#scope').onchange = ev=>{ st.scope=ev.target.value; st.limit=300; render(); };
     $('#noise').onchange = ev=>{ st.hideNoise=ev.target.checked; render(); };
     $('#explain') && ($('#explain').onchange = ev=>{ st.explain=ev.target.checked; try{ localStorage.setItem('secview-explain', st.explain?'1':'0'); }catch(_){} render(); });
+  }
+  if(st.view==='ips'){
+    const si = $('#srvip');
+    if(si) si.onchange = ()=>{ try{ localStorage.setItem('secview-server-ip', si.value.trim()); }catch(_){} SERVER_IPS = si.value.split(/[\s,]+/).filter(Boolean); if(!si.value.trim()) loadServerIps(); render(); };
+  }
+  if(st.view==='files'){
+    const q = $('#fq'); let t;
+    if(q) q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ fv.q=q.value; const pos=q.selectionStart; render(); const n=$('#fq'); n.focus(); n.setSelectionRange(pos,pos); },160); };
+    const o = $('#fonly'); if(o) o.onchange = ev=>{ fv.only=ev.target.checked; render(); };
+    if(fv.focus){ const i=(D.files||[]).findIndex(f=>f.path===fv.focus); const el=document.getElementById('file-'+i); if(el){ el.scrollIntoView({block:'center'}); } }
   }
   if(st.view==='history'){
     const q = $('#hq'); let t;
@@ -2948,7 +3519,7 @@ document.addEventListener('click', ev=>{
     case 'kpi-high': go('timeline',{minSev:3,cats:new Set(Object.keys(CATS)),ip:null,user:null,sid:null,q:''}); break;
     case 'cat': st.cats.has(v)?st.cats.delete(v):st.cats.add(v); st.limit=300; render(); break;
     case 'allcats': st.cats = st.cats.size===Object.keys(CATS).length?new Set():new Set(Object.keys(CATS)); render(); break;
-    case 'ip': go('timeline',{ip:v,sid:null,cats:new Set(Object.keys(CATS))}); break;
+    case 'ip': go('timeline',{ip:v,sid:null,dest:null,fpath:null,scope:'all',cats:new Set(Object.keys(CATS))}); break;
     case 'user': go('timeline',{user:v}); break;
     case 'clr': st[v]=null; render(); break;
     case 'more': st.limit+=500; render(); break;
@@ -2959,6 +3530,10 @@ document.addEventListener('click', ev=>{
     case 'ipsess': go('sessions',{ip:v}); break;
     case 'ipcard': go('ips'); setTimeout(()=>{ const el=document.getElementById('ip-'+v); if(el){ el.scrollIntoView({block:'center'}); el.style.outline='2px solid var(--accent)'; } },0); break;
     case 'pick': $('#fin').click(); break;
+    case 'dest': go('timeline',{dest:v,ip:null,sid:null,user:null,fpath:null,scope:'all',cats:new Set(Object.keys(CATS)),minSev:0,q:''}); break;
+    case 'destcard': go('ips'); setTimeout(()=>{ const el=document.getElementById('dest-'+v); if(el){ el.scrollIntoView({block:'center'}); el.style.outline='2px solid var(--accent)'; } },0); break;
+    case 'file': fv.focus=v; fv.q=''; fv.only=false; go('files'); break;
+    case 'fpath': go('timeline',{fpath:v,ip:null,sid:null,user:null,dest:null,scope:'all',cats:new Set(Object.keys(CATS)),minSev:0,q:''}); break;
     case 'hfile': hv.file=+v; hv.q=''; render(); window.scrollTo(0,0); break;
     case 'hline': { const e = E[+v]; if(e) openEvent(+v); break; }
     case 'guidego': go(v); break;

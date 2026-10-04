@@ -72,12 +72,18 @@ Oct  3 02:13:20 web01 sshd[2122]: Failed password for invalid user deploy from 4
 Oct  3 02:13:28 web01 sshd[2122]: Failed password for root from 45.133.1.77 port 51258 ssh2
 Oct  3 02:13:33 web01 sshd[2122]: Failed password for root from 45.133.1.77 port 51295 ssh2
 Oct  3 02:13:39 web01 sshd[2122]: Connection closed by authenticating user root 45.133.1.77 port 51295 [preauth]
+Oct  3 02:14:07 web01 sshd[2211]: Connection from 45.133.1.77 port 51544 on 10.0.0.5 port 22 rdomain ""
 Oct  3 02:14:07 web01 sshd[2211]: Accepted password for root from 45.133.1.77 port 51544 ssh2
 Oct  3 02:14:07 web01 sshd[2211]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
 Oct  3 02:22:40 web01 sudo[2290]:     root : TTY=pts/1 ; PWD=/root ; USER=postgres ; COMMAND=/usr/bin/pg_dump crm
 Oct  3 02:28:40 web01 useradd[2301]: new group: name=sysupd, GID=0
 Oct  3 02:28:40 web01 useradd[2301]: new user: name=sysupd, UID=0, GID=0, home=/home/sysupd, shell=/bin/bash, from=/dev/pts/1
 Oct  3 02:28:52 web01 chpasswd[2305]: pam_unix(chpasswd:chauthtok): password changed for sysupd
+Oct  3 02:32:41 web01 sshd[2350]: Connection from 10.0.0.5 port 40122 on 10.0.0.5 port 22 rdomain ""
+Oct  3 02:32:41 web01 sshd[2350]: Accepted password for root from 10.0.0.5 port 40122 ssh2
+Oct  3 02:32:41 web01 sshd[2350]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+Oct  3 02:33:20 web01 sshd[2350]: Disconnected from user root 10.0.0.5 port 40122
+Oct  3 02:33:20 web01 sshd[2350]: pam_unix(sshd:session): session closed for user root
 Oct  3 02:33:50 web01 sshd[2211]: Received disconnect from 45.133.1.77 port 51544:11: disconnected by user
 Oct  3 02:33:50 web01 sshd[2211]: Disconnected from user root 45.133.1.77 port 51544
 Oct  3 02:33:50 web01 sshd[2211]: pam_unix(sshd:session): session closed for user root
