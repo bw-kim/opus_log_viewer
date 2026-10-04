@@ -1061,7 +1061,7 @@ SYSLOG_RE = re.compile(
     r'^(?:<\d+>)?(?:(?P<bsd>[A-Z][a-z]{2}\s+\d{1,2}\s+\d\d:\d\d:\d\d)'
     r'|(?P<iso>\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?))'
     r'\s+(?P<host>\S+)\s+(?P<prog>[^\s\[:]+)(?:\[(?P<pid>\d+)\])?:\s?(?P<msg>.*)$')
-ISO_RE = re.compile(r'^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:[.,](\d+))?\s*(Z|[+-]\d\d:?\d\d|[+-]\d\d)?$')
+ISO_RE = re.compile(r'^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d))?(?:[.,](\d+))?\s*(Z|[+-]\d\d:?\d\d|[+-]\d\d)?$')
 
 
 def open_text(path):
@@ -1160,13 +1160,14 @@ def shell_join(args):
 
 # ───────────────────────── 분석기 ─────────────────────────
 class Analyzer:
-    def __init__(self, root, tz, year=None, audit_all=False, use_journal=True, since=None, server_ips=()):
+    def __init__(self, root, tz, year=None, audit_all=False, use_journal=True, since=None, server_ips=(), until=None):
         self.root = os.path.abspath(root)
         self.tz = tz
         self.year = year
         self.audit_all = audit_all
         self.use_journal = use_journal
         self.since = since
+        self.until = until
         self.events = []
         self.sources = []
         self.notes = []
@@ -1243,7 +1244,7 @@ class Analyzer:
             tzinfo = dt.timezone(dt.timedelta(minutes=-mins if off[0] == '-' else mins))
         us = int((frac or '0')[:6].ljust(6, '0'))
         try:
-            return dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(se), us, tzinfo=tzinfo).timestamp()
+            return dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(se or 0), us, tzinfo=tzinfo).timestamp()
         except ValueError:
             return None
 
@@ -1259,6 +1260,8 @@ class Analyzer:
         self.scan_known_hosts()
         if self.since:
             self.events = [e for e in self.events if e['ts'] is None or e['ts'] >= self.since]
+        if self.until:
+            self.events = [e for e in self.events if e['ts'] is None or e['ts'] < self.until]
         return self.correlate()
 
     def load_passwd(self):
@@ -2247,6 +2250,7 @@ class Analyzer:
                 'range': [min(tss), max(tss)] if tss else None,
                 'sources': self.sources, 'notes': self.notes, 'version': '1.1',
                 'server_ips': sorted(self.server_ips | self.server_ips_auto), 'server_ips_auto': sorted(self.server_ips_auto),
+                'period': [self.since, self.until] if (self.since or self.until) else None,
             },
             'cats': CATS,
             'events': out_events,
@@ -2437,8 +2441,8 @@ class UploadJob:
         res['skipped'] = res['skipped'][:100]
         return res
 
-    def analyze(self, tz, server_ips=()):
-        data = Analyzer(self.root, tz, server_ips=server_ips).run()
+    def analyze(self, tz, server_ips=(), since=None, until=None):
+        data = Analyzer(self.root, tz, server_ips=server_ips, since=since, until=until).run()
         rename = lambda p: self.names.get(p, p)
         for e in data['events']:
             if e.get('src') in self.names:
@@ -2511,7 +2515,12 @@ def serve(data, bind, port, open_browser=False):
                 except argparse.ArgumentTypeError:
                     tz = tz_from_str('local')
                 t0 = time.time()
-                data = job.analyze(tz, re.split(r'[,\s]+', q.get('server_ip', [''])[0]))
+                def num(k):
+                    try:
+                        return float(q.get(k, [''])[0]) or None
+                    except ValueError:
+                        return None
+                data = job.analyze(tz, re.split(r'[,\s]+', q.get('server_ip', [''])[0]), num('since'), num('until'))
                 # 직전 결과에 이어서 올릴 수 있도록 이번 작업 폴더는 남기고, 그 전 작업은 정리
                 old = state.get('job')
                 if old and old != job_id and old in jobs:
@@ -2556,6 +2565,7 @@ def main():
                     help='syslog 시각의 시간대 (예: +09:00, UTC). 기본은 이 PC 시간대')
     ap.add_argument('--year', type=int, help='연도가 없는 syslog 의 연도 (기본: 파일 수정시각으로 추정)')
     ap.add_argument('--since', help='이 시각 이후만 (예: 2026-10-01 또는 2026-10-01T02:00)')
+    ap.add_argument('--until', help='이 시각 이전만 (예: 2026-10-05 → 10-04 까지 포함, 또는 2026-10-04T18:00)')
     ap.add_argument('--server-ip', default='', help='분석 대상 서버 자신의 IP (쉼표로 여러 개). 자기 자신에서 출발한 접속을 구분')
     ap.add_argument('--audit-all', action='store_true', help='auditd 에서 로그인 세션이 없는(데몬) 명령도 포함')
     ap.add_argument('--no-journal', action='store_true', help='auth 로그가 없어도 journalctl 을 쓰지 않음')
@@ -2579,13 +2589,18 @@ def main():
         since = Analyzer('/', a.tz).ts_iso(a.since if 'T' in a.since or ' ' in a.since else a.since + 'T00:00:00')
         if since is None:
             ap.error('--since 형식: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM:SS')
+    until = None
+    if a.until:
+        until = Analyzer('/', a.tz).ts_iso(a.until if 'T' in a.until or ' ' in a.until else a.until + 'T00:00:00')
+        if until is None:
+            ap.error('--until 형식: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM:SS')
     if not os.path.isdir(a.root):
         ap.error(f'디렉터리가 없습니다: {a.root}')
     if a.root == '/' and hasattr(os, 'geteuid') and os.geteuid() != 0:
         print('[!] root 가 아니면 auth.log / audit.log / btmp 를 못 읽을 수 있습니다. sudo 로 실행을 권장합니다.')
 
     t0 = time.time()
-    an = Analyzer(a.root, a.tz, a.year, a.audit_all, not a.no_journal, since, re.split(r'[,\s]+', a.server_ip))
+    an = Analyzer(a.root, a.tz, a.year, a.audit_all, not a.no_journal, since, re.split(r'[,\s]+', a.server_ip), until)
     data = an.run()
     with open(a.output, 'w', encoding='utf-8') as f:
         f.write(render_html(data))
@@ -2776,6 +2791,19 @@ pre.raw{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var
 .ex-chk b{color:var(--high);margin-right:4px}
 .flow .expl{margin-top:4px}
 .flow .ex-sum,.sline .ex-sum{background:none;padding:0;color:var(--muted);font-size:12.5px}
+/* 기간 필터 */
+.rangebar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin-bottom:14px;font-size:13px}
+.rangebar input[type=datetime-local],.uprange input{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:4px 7px;color:var(--text);font:12.5px var(--mono);color-scheme:inherit}
+.rb-l{font-weight:700}
+.rb-t{color:var(--muted)}
+.rb-q{display:inline-flex;gap:4px;flex-wrap:wrap}
+.rb-q .iconbtn{padding:4px 8px;font-size:12px}
+.rb-info{color:var(--muted);font-size:12.5px;margin-left:auto}
+.rb-info b{color:var(--text)}
+.rb-note{flex-basis:100%;font-size:12px;color:var(--high)}
+.uprange{font-size:12.5px;color:var(--text);display:inline-flex;gap:5px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px 8px;flex-wrap:wrap}
+.rangebar input[type=datetime-local]{min-width:210px}
+@media (max-width:640px){.rb-info{margin-left:0;flex-basis:100%}.rangebar input[type=datetime-local]{flex:1 1 100%;min-width:0}.rb-t{display:none}}
 /* 날짜별 막대그래프 */
 .hhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:4px}
 .hhead h2{margin:0}
@@ -2958,7 +2986,7 @@ body.dragging::after{content:"여기에 놓으면 업로드 후 분석합니다"
 'use strict';
 const SEVS=['info','low','med','high','crit'], SEV_L={info:'정보',low:'낮음',med:'중간',high:'높음',crit:'치명'};
 const sr = s => SEVS.indexOf(s);
-let D, E, CATS, M, bySid, SESS, OFF, HIST, bySrcLine;
+let D, E, CATS, M, bySid, SESS, OFF, HIST, bySrcLine, ER, V, VKEY;
 const up = { server:null, busy:false, items:[], msg:'', err:'', job:null, append:true };
 const hv = { file:0, q:'', risky:false };
 const st = { view:'overview', cats:new Set(), minSev:0, q:'', ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', limit:300, open:new Set(), hideNoise:true, explain:true };
@@ -3051,6 +3079,7 @@ function renderMeta(){
     M.hosts.length?`호스트 <b>${esc(M.hosts.join(', '))}</b>`:'',
     r?`기간 <b>${fmt(r[0])}</b> ~ <b>${fmt(r[1])}</b> <span>(${esc(M.tz_label)})</span>`:'',
     `이벤트 <b>${E.length.toLocaleString()}</b>`,
+    M.period ? `<span class="badge">분석 기간 제한</span>` : '',
     `생성 ${esc(M.generated)}`
   ].filter(Boolean).map(x=>`<span>${x}</span>`).join('');
 }
@@ -3062,7 +3091,7 @@ $('#theme').onclick = ()=>{
 if(!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.dataset.theme='light';
 
 function renderNav(){
-  const VIEWS = [['overview','개요'],['timeline','타임라인',E.length],['ips','접속 방향',D.ips.length+(D.outbound||[]).length],['sessions','세션',D.sessions.length],['files','파일 추적',(D.files||[]).length],
+  const VIEWS = [['overview','개요'],['timeline','타임라인',ER.length],['ips','접속 방향',V.ips.length+(V.outbound||[]).length],['sessions','세션',V.sessions.length],['files','파일 추적',(V.files||[]).length],
     ['history','히스토리',HIST.length],['sources','로그 소스',M.sources.length],['guide','로그 가이드'],['upload','⤒ 로그 불러오기']];
   $('#nav').innerHTML = VIEWS.map(([k,l,n])=>`<button data-act="view" data-v="${k}" class="${st.view===k?'on':''}">${l}${n!=null?`<span class="n">${n.toLocaleString()}</span>`:''}</button>`).join('');
 }
@@ -3108,6 +3137,7 @@ function uploadView(){
         <button class="iconbtn primary" data-act="pick" ${off||up.busy?'disabled':''}>파일 선택</button>
         <button class="iconbtn" data-act="pickdir" ${off||up.busy?'disabled':''}>폴더 선택</button>
         ${up.job && !off ? `<label class="appendchk"><input type="checkbox" id="append" ${up.append?'checked':''} ${up.busy?'disabled':''}>지금 결과에 추가로 합치기</label>` : ''}
+        <span class="uprange" title="로그가 아주 많을 때 이 기간만 분석합니다 (비워 두면 전체)">분석 기간 <input type="date" id="upfrom" value="${esc(up.from||'')}" ${up.busy?'disabled':''}> ~ <input type="date" id="upto" value="${esc(up.to||'')}" ${up.busy?'disabled':''}></span>
         <select id="tz" ${up.busy?'disabled':''} title="syslog 처럼 시간대가 없는 로그를 어떤 시간대로 해석할지">${TZS.map(([v,l])=>`<option value="${v}" ${up.tz===v?'selected':''}>로그 시간대: ${esc(l)}</option>`).join('')}</select>
       </div>
       <input type="file" id="fin" multiple hidden><input type="file" id="din" webkitdirectory multiple hidden>
@@ -3152,7 +3182,10 @@ async function uploadAll(list){
     if(!appending && !up.items.some(it=>it.placed && it.placed.length)) throw new Error('분석할 수 있는 로그가 없습니다. 아래 표의 파일을 올려주세요.');
     if(appending && !up.items.some(it=>it.placed && it.placed.length)) throw new Error('새로 추가된 로그가 없습니다. (이미 올린 파일이거나 분석 대상이 아닌 파일)');
     up.msg='분석 중…'; render();
-    const r = await fetch(`/api/analyze?job=${job}&tz=${encodeURIComponent(up.tz)}&server_ip=${encodeURIComponent(SERVER_IPS.join(','))}`, {method:'POST'});
+    const tzOff = (()=>{ const m=/^([+-])(\d\d):(\d\d)$/.exec(up.tz); return m ? (m[1]==='-'?-1:1)*(+m[2]*60 + +m[3]) : OFF; })();
+    const dayTs = v => v ? Date.UTC(+v.slice(0,4), +v.slice(5,7)-1, +v.slice(8,10))/1000 - tzOff*60 : null;
+    const sinceTs = dayTs(up.from), untilTs = up.to ? dayTs(up.to) + 86400 : null;
+    const r = await fetch(`/api/analyze?job=${job}&tz=${encodeURIComponent(up.tz)}&server_ip=${encodeURIComponent(SERVER_IPS.join(','))}${sinceTs!=null?'&since='+sinceTs:''}${untilTs!=null?'&until='+untilTs:''}`, {method:'POST'});
     if(!r.ok) throw new Error('분석 실패 (HTTP '+r.status+')');
     const data = await r.json();
     up.busy=false; up.msg=`${appending?'기존 결과에 추가 · ':''}올린 파일 ${up.items.length}개 → 전체 이벤트 ${data.events.length.toLocaleString()}건`;
@@ -3173,10 +3206,123 @@ document.addEventListener('change', ev=>{
   if(ev.target.id==='fin' || ev.target.id==='din') uploadAll([...ev.target.files].map(f=>({f, path:f.webkitRelativePath||f.name})));
   if(ev.target.id==='tz') up.tz = ev.target.value;
   if(ev.target.id==='append') up.append = ev.target.checked;
+  if(ev.target.id==='upfrom') up.from = ev.target.value;
+  if(ev.target.id==='upto') up.to = ev.target.value;
 });
 
 /* ── 필터 ── */
 function searchText(e){ return e._s || (e._s = [e.msg,e.cmd,e.user,e.ip,e.raw,e.src,e.cwd,(e.tags||[]).join(' '),explText(e)].join(' ').toLowerCase()); }
+/* ── 기간 필터: 범위 안 이벤트(ER)와 그걸로 다시 계산한 집계(V) ── */
+const inRange = e => !st.range || (e.ts!=null && e.ts>=st.range[0] && e.ts<st.range[1]);
+function refreshView(){
+  const key = st.range ? st.range.join('-') : '';
+  if(VKEY === key && ER) return;
+  VKEY = key;
+  ER = st.range ? E.filter(inRange) : E;
+  V = st.range ? derive(ER) : D;
+}
+const PRIV_RE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.)|^(::1|f[cd][0-9a-f]{2}:)/i;
+const HIDDEN_JS = /\/(tmp|var\/tmp|dev\/shm)\/\.[^/\s]*/;
+function derive(evs){
+  const base = {}; D.ips.forEach(p=>base[p.ip]=p);
+  const kb = {}; (D.outbound||[]).forEach(a=>kb[a.host]=a);
+  const ipm = {}, om = {}, fm = {};
+  const uniq = (arr, v) => { if(v && !arr.includes(v)) arr.push(v); };
+  for(const e of evs){
+    if(e.ip && !(e.ip_inferred && e.cat==='auth')){
+      const p = ipm[e.ip] || (ipm[e.ip] = {ip:e.ip, private: base[e.ip] ? base[e.ip].private : PRIV_RE.test(e.ip), self: base[e.ip] && base[e.ip].self,
+        fails:0, ok:0, tried:{}, ok_users:[], first:null, last:null, cats:{}, sev:{}, sessions:new Set()});
+      if(e.kind==='login_fail'){ p.fails++; if(e.user) p.tried[e.user]=(p.tried[e.user]||0)+1; }
+      else if(e.kind==='btmp' && !(e.tags||[]).includes('auth 로그와 중복 집계 제외')) p.fails += e.count||0;
+      else if(e.kind==='invalid' && e.user) p.tried[e.user] = p.tried[e.user]||0;
+      else if(e.kind==='login_ok'){ p.ok++; uniq(p.ok_users, e.user); }
+      if(e.ts!=null){ p.first = p.first==null ? e.ts : Math.min(p.first, e.ts); p.last = p.last==null ? e.ts : Math.max(p.last, e.ts); }
+      if(e.cat!=='auth' && e.cat!=='session') p.cats[e.cat] = (p.cats[e.cat]||0)+1;
+      p.sev[e.sev] = (p.sev[e.sev]||0)+1;
+      if(e.sid) p.sessions.add(e.sid);
+    }
+    for(const d of e.dest||[]){
+      const a = om[d.host] || (om[d.host] = {host:d.host, kind:d.kind, ports:[], whats:{}, count:0, first:null, last:null, users:[], sessions:[], src_ips:[], events:[], sev:'info', known_by:(kb[d.host]||{}).known_by||[]});
+      a.count++; a.whats[d.what] = (a.whats[d.what]||0)+1;
+      uniq(a.ports, d.port); uniq(a.users, e.user); uniq(a.sessions, e.sid); uniq(a.src_ips, e.ip);
+      if(e.ts!=null){ a.first = a.first==null ? e.ts : Math.min(a.first, e.ts); a.last = a.last==null ? e.ts : Math.max(a.last, e.ts); }
+      a.events.push(e._i); if(sr(e.sev)>sr(a.sev)) a.sev = e.sev;
+    }
+    for(const f of e.files||[]){
+      for(const [path, op] of [[f.path, f.op], [f.to, f.op==='이동'?'이동해 온 곳':'복사본']]){
+        if(!path) continue;
+        const a = fm[path] || (fm[path] = {path, ops:[], sev:'info', flags:[]});
+        const o = {i:e._i, ts:e.ts, op, how:f.how, user:e.user, sid:e.sid};
+        if(f.to && path===f.path) o.to = f.to;
+        if(path===f.to) o.from = f.path;
+        a.ops.push(o); if(sr(e.sev)>sr(a.sev)) a.sev = e.sev;
+      }
+    }
+  }
+  const ips = Object.values(ipm).map(p=>{
+    let sc = p.ok*30 + (p.fails>=5?10:0) + Math.min(p.fails,200)*0.2 + (p.sev.crit||0)*15 + (p.sev.high||0)*6 + (p.sev.med||0)*2;
+    if(p.private) sc *= 0.5;
+    return Object.assign(p, {score:Math.round(sc*10)/10, tried:Object.entries(p.tried).sort((a,b)=>b[1]-a[1]).slice(0,15), sessions:[...p.sessions]});
+  }).sort((a,b)=>b.score-a.score);
+  const outbound = Object.values(om).map(a=>Object.assign(a, {whats:Object.entries(a.whats).sort((x,y)=>y[1]-x[1])}))
+    .sort((a,b)=>sr(b.sev)-sr(a.sev) || b.count-a.count || (a.host<b.host?-1:1));
+  const files = Object.values(fm).map(a=>{
+    a.ops.sort((x,y)=>(x.ts==null)-(y.ts==null) || (x.ts||0)-(y.ts||0) || x.i-y.i);
+    const k = new Set(a.ops.map(o=>o.op));
+    if(k.has('외부로 유출')) a.flags.push('유출');
+    if(k.has('삭제')) a.flags.push(a.ops[a.ops.length-1].op==='삭제' ? '삭제됨' : '삭제 기록');
+    if(HIDDEN_JS.test(a.path)) a.flags.push('숨김 경로');
+    return a;
+  }).sort((a,b)=>(b.flags.includes('유출')-a.flags.includes('유출')) || sr(b.sev)-sr(a.sev) || b.ops.length-a.ops.length);
+  const [ra, rb] = st.range;
+  const sessions = D.sessions.filter(x=>x.start < rb && (x.end ?? x.last ?? x.start) >= ra);
+  return {ips, outbound, files, sessions, known_hosts:D.known_hosts};
+}
+const dtVal = ts => ts==null ? '' : iso(ts).slice(0,16);
+function dtParse(v){
+  const m = /^(\d{4})-(\d\d)-(\d\d)(?:T(\d\d):(\d\d))?/.exec(v||''); if(!m) return null;
+  return Date.UTC(+m[1], +m[2]-1, +m[3], +(m[4]||0), +(m[5]||0))/1000 - OFF*60;
+}
+function rangeBar(){
+  if(['upload','guide','sources'].includes(st.view) || !E.length) return '';
+  const r = M.range || [null, null];
+  const [a, b] = st.range || [null, null];
+  const quick = [['1','마지막 1일'],['7','마지막 7일'],['30','마지막 30일']];
+  const per = M.period;
+  return `<div class="rangebar">
+    <span class="rb-l">기간</span>
+    <input type="datetime-local" id="rfrom" value="${dtVal(a)}" min="${dtVal(r[0])}" max="${dtVal(r[1])}" aria-label="시작 시각">
+    <span class="rb-t">~</span>
+    <input type="datetime-local" id="rto" value="${b!=null?dtVal(b-60):''}" min="${dtVal(r[0])}" max="${dtVal(r[1])}" aria-label="끝 시각">
+    <button class="iconbtn primary" data-act="rapply">적용</button>
+    <span class="rb-q">${quick.map(([v,l])=>`<button class="iconbtn" data-act="rquick" data-v="${v}">${l}</button>`).join('')}</span>
+    ${st.range?`<span class="rb-info"><b>${ER.length.toLocaleString()}</b> / 전체 ${E.length.toLocaleString()}건</span><button class="iconbtn" data-act="clrrange">기간 해제</button>`:
+      `<span class="rb-info">로그 범위 ${r[0]!=null?fmt(r[0]).slice(0,16):'?'} ~ ${r[1]!=null?fmt(r[1]).slice(0,16):'?'} (${esc(M.tz_label)})</span>`}
+    ${up.server && up.job && st.range ? `<button class="iconbtn" data-act="reanalyze" title="서버에서 이 기간의 로그만 다시 분석합니다. 로그가 아주 많을 때 화면이 가벼워집니다.">이 기간만 다시 분석</button>` : ''}
+    ${per ? `<span class="rb-note">분석 자체를 ${per[0]?fmt(per[0]).slice(0,16):'처음'} ~ ${per[1]?fmt(per[1]-60).slice(0,16):'끝'} 로 제한한 결과입니다${up.server&&up.job?` <button class="iconbtn" data-act="reanalyze-all">전체 기간으로 다시 분석</button>`:''}</span>` : ''}
+  </div>`;
+}
+function applyRange(a, b){
+  if(a!=null && b!=null && b<=a){ alert('끝 시각이 시작 시각보다 뒤여야 합니다.'); return; }
+  const r = M.range || [0, 0];
+  if(a==null && b==null){ st.range=null; st.rangeLabel=null; }
+  else {
+    st.range = [a ?? r[0], b ?? r[1]+1];
+    st.rangeLabel = `${fmt(st.range[0]).slice(0,16)} ~ ${fmt(st.range[1]-60).slice(0,16)}`;
+  }
+  st.limit = 300; render();
+}
+async function reanalyze(all){
+  if(!up.server || !up.job) return;
+  const q = all ? '' : `&since=${st.range[0]}&until=${st.range[1]}`;
+  const btn = document.querySelector(all?'[data-act=reanalyze-all]':'[data-act=reanalyze]'); if(btn){ btn.disabled=true; btn.textContent='분석 중…'; }
+  try{
+    const r = await fetch(`/api/analyze?job=${up.job}&tz=${encodeURIComponent(up.tz)}&server_ip=${encodeURIComponent(SERVER_IPS.join(','))}${q}`, {method:'POST'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const view = st.view; load(await r.json()); renderMeta(); st.view = E.length ? view : 'upload'; VKEY = null; render();
+  }catch(ex){ alert('다시 분석하지 못했습니다: '+(ex.message||ex)); if(btn){ btn.disabled=false; } }
+}
+
 function filtered(ignoreRange){
   const q = st.q.trim().toLowerCase(), rg = ignoreRange ? null : st.range;
   return E.filter(e => (!rg || (e.ts!=null && e.ts>=rg[0] && e.ts<rg[1])) && st.cats.has(e.cat) && sr(e.sev)>=st.minSev && (!st.ip||e.ip===st.ip) && (!st.user||e.user===st.user)
@@ -3190,29 +3336,29 @@ function go(view, f){
 
 /* ── 개요 ── */
 function overview(){
-  const ext = D.ips.filter(p=>p.ok>0 && !p.private);
-  const fails = D.ips.reduce((a,p)=>a+p.fails,0);
-  const cmds = E.filter(e=>e.via && e.cat!=='db' || e.via==='audit' || (e.via && e.cmd && e.cat==='db' && !(e.tags||[]).includes('DB 히스토리'))).length;
-  const dbd = E.filter(e=>e.cat==='db' && e.sev==='crit').length;
-  const xfer = E.filter(e=>e.cat==='transfer').length;
-  const xferOut = E.filter(e=>e.cat==='transfer' && /유출/.test(e.msg+(e.tags||[]).join())).length;
-  const pa = E.filter(e=>e.cat==='persist'||e.cat==='antiforensic').length;
-  const outHosts = (D.outbound||[]).filter(a=>a.count>0 && !isSelf(a.host));
+  const ext = V.ips.filter(p=>p.ok>0 && !p.private && !isSelf(p.ip));
+  const fails = V.ips.reduce((a,p)=>a+p.fails,0);
+  const cmds = ER.filter(e=>e.via && e.cat!=='db' || e.via==='audit' || (e.via && e.cmd && e.cat==='db' && !(e.tags||[]).includes('DB 히스토리'))).length;
+  const dbd = ER.filter(e=>e.cat==='db' && e.sev==='crit').length;
+  const xfer = ER.filter(e=>e.cat==='transfer').length;
+  const xferOut = ER.filter(e=>e.cat==='transfer' && /유출/.test(e.msg+(e.tags||[]).join())).length;
+  const pa = ER.filter(e=>e.cat==='persist'||e.cat==='antiforensic').length;
+  const outHosts = (V.outbound||[]).filter(a=>a.count>0 && !isSelf(a.host));
   const K = [
     ['침입 성공 외부 IP', ext.length, ext.slice(0,3).map(p=>p.ip).join(', ')||'없음', '--crit', ()=>go('ips')],
-    ['SSH 로그인 실패', fails, `${D.ips.filter(p=>p.fails>=5).length}개 IP 무차별 대입`, '--c-auth', ()=>go('timeline',{cats:new Set(['auth']),minSev:0})],
+    ['SSH 로그인 실패', fails, `${V.ips.filter(p=>p.fails>=5).length}개 IP 무차별 대입`, '--c-auth', ()=>go('timeline',{cats:new Set(['auth']),minSev:0})],
     ['실행 명령', cmds, '히스토리 · auditd · sudo', '--c-cmd', ()=>go('timeline',{cats:new Set(['cmd','recon','exec','privesc','persist','antiforensic','db','transfer']),q:'',minSev:0})],
     ['DB 덤프', dbd, 'mysqldump · pg_dump · OUTFILE', '--c-db', ()=>go('timeline',{cats:new Set(['db']),minSev:0})],
     ['파일 전송', xfer, `유출 의심 ${xferOut}건`, '--c-transfer', ()=>go('timeline',{cats:new Set(['transfer']),minSev:0})],
     ['지속성 · 흔적삭제', pa, '계정 · 키 · cron · history', '--c-persist', ()=>go('timeline',{cats:new Set(['persist','antiforensic']),minSev:0})],
     ['⬆ 나간 접속 목적지', outHosts.length, outHosts.slice(0,3).map(a=>a.host).join(', ')||'없음', '--c-lateral', ()=>{ go('ips'); setTimeout(()=>{ const el=document.getElementById('outsec'); if(el) el.scrollIntoView({block:'start'}); window.scrollBy(0,-110); },0); }],
-    ['📄 파일 작업', (D.files||[]).length, `유출 ${(D.files||[]).filter(f=>f.flags.includes('유출')).length} · 삭제 ${(D.files||[]).filter(f=>f.flags.some(x=>x.startsWith('삭제'))).length}`, '--c-fileop', ()=>go('files')],
+    ['📄 파일 작업', (V.files||[]).length, `유출 ${(V.files||[]).filter(f=>f.flags.includes('유출')).length} · 삭제 ${(V.files||[]).filter(f=>f.flags.some(x=>x.startsWith('삭제'))).length}`, '--c-fileop', ()=>go('files')],
   ];
   window._kpi = K.map(k=>k[4]);
   let h = `<div class="kpis">${K.map((k,i)=>`<button class="kpi${k[1]?'':' zero'}" style="--k:var(${k[3]})" data-act="kpi" data-v="${i}"><div class="l">${k[0]}</div><div class="v">${k[1].toLocaleString()}</div><div class="s">${esc(k[2])}</div></button>`).join('')}</div>`;
   if(M.notes.length) h += `<div class="notes">${M.notes.map(n=>`<div>${esc(n)}</div>`).join('')}</div>`;
 
-  const key = E.filter(e=>sr(e.sev)>=3 && e.ts!=null);
+  const key = ER.filter(e=>sr(e.sev)>=3 && e.ts!=null);
   let lastDay='';
   const flow = key.slice(0,80).map(e=>{
     const d = day(e.ts); const sep = d!==lastDay ? `<div class="daysep">${d}</div>` : ''; lastDay=d;
@@ -3224,12 +3370,12 @@ function overview(){
   h += dateChartOverview();
   h += `<div class="grid2"><section class="panel"><h2>공격 흐름 <small>위험도 높음 이상 ${key.length}건, 시간순</small></h2>
     ${key.length?`<ul class="flow">${flow}</ul>${key.length>80?`<a data-act="kpi-high" class="more iconbtn" style="text-align:center">전체 ${key.length}건 타임라인에서 보기</a>`:''}`:'<div class="empty">높은 위험도 이벤트가 없습니다.</div>'}</section>
-    <section><div class="panel" style="margin-bottom:16px"><h2>위험 IP <small>상위 ${Math.min(6,D.ips.length)}</small></h2>${D.ips.slice(0,6).map(ipMini).join('')||'<div class="empty">IP 정보 없음</div>'}</div>
-    <div class="panel"><h2>위험 세션</h2>${D.sessions.filter(s=>sr(s.max_sev)>=3).slice(0,8).map(sessMini).join('')||'<div class="empty">없음</div>'}</div></section></div>`;
+    <section><div class="panel" style="margin-bottom:16px"><h2>위험 IP <small>상위 ${Math.min(6,V.ips.length)}</small></h2>${V.ips.slice(0,6).map(ipMini).join('')||'<div class="empty">IP 정보 없음</div>'}</div>
+    <div class="panel"><h2>위험 세션</h2>${V.sessions.filter(s=>sr(s.max_sev)>=3).slice(0,8).map(sessMini).join('')||'<div class="empty">없음</div>'}</div></section></div>`;
   return h;
 }
 function ipMini(p){
-  const max = D.ips[0].score||1;
+  const max = (V.ips[0]||{}).score||1;
   return `<div style="padding:8px 0;border-bottom:1px solid var(--line2)">
     <div style="display:flex;align-items:center;gap:8px"><a class="mono" data-act="ipcard" data-v="${esc(p.ip)}" style="font-weight:600">${esc(p.ip)}</a>
     ${p.private?'<span class="badge">내부</span>':''}${p.ok&&p.fails>=3?'<span class="badge red">무차별 대입 성공</span>':p.ok?'<span class="badge red">로그인 성공</span>':''}
@@ -3307,7 +3453,7 @@ function unitSeg(){
 const LEGEND_EMPH = `<div class="clegend"><span><i class="sw s-hi"></i>위험도 높음 이상 (치명·높음)</span><span><i class="sw s-rest"></i>그 외</span></div>`;
 /* 개요: 전체 + 분류별 작은 막대(small multiples) */
 function dateChartOverview(){
-  const evs = E.filter(e=>!isNoise(e));
+  const evs = ER.filter(e=>!isNoise(e));
   const {bins, unit, unknown} = makeBins(evs, binUnit(evs));
   if(!bins.length) return '';
   const cats = Object.keys(CATS).filter(c=>bins.some(b=>b.cats[c]));
@@ -3448,9 +3594,9 @@ function outCard(a){
       <div class="acts"><button class="iconbtn" data-act="dest" data-v="${esc(a.host)}">타임라인</button></div>`:''}</div>`;
 }
 function ips(){
-  const ins = D.ips, outs = D.outbound||[];
+  const ins = V.ips, outs = V.outbound||[];
   const max = (ins[0]&&ins[0].score)||1;
-  const selfIn = E.filter(e=>e.kind==='login_ok' && (e.self_origin || isSelf(e.ip))).length;
+  const selfIn = ER.filter(e=>e.kind==='login_ok' && (e.self_origin || isSelf(e.ip))).length;
   const topIn = ins.filter(p=>!isSelf(p.ip)).slice(0,6), topOut = outs.filter(a=>!isSelf(a.host)).slice(0,6);
   const hashed = (D.known_hosts||[]).reduce((n,k)=>n+k.hashed,0);
   return `<div class="panel srvbar"><label for="srvip"><b>이 서버 IP</b></label>
@@ -3475,7 +3621,7 @@ function ips(){
 
 /* ── 파일 추적 ── */
 function filesView(){
-  const F = D.files||[];
+  const F = V.files||[];
   if(!F.length) return '<div class="panel empty">파일 작업 기록이 없습니다. (명령 기록·SFTP/FTP 로그에서 저장·이동·삭제·전송을 찾습니다)</div>';
   const q = fv.q.trim().toLowerCase();
   let list = F.map((f,i)=>({f,i}));
@@ -3496,7 +3642,7 @@ function filesView(){
 
 /* ── 세션 ── */
 function sessions(){
-  let list = D.sessions;
+  let list = V.sessions;
   if(st.ip) list = list.filter(s=>s.ip===st.ip);
   if(!list.length) return '<div class="panel empty">세션 정보가 없습니다. (auth.log / wtmp / audit 의 로그인 기록으로 만듭니다)</div>';
   const head = st.ip?`<div class="toolbar"><span class="pill">IP: <b class="mono">${esc(st.ip)}</b><button data-act="clr" data-v="ip">×</button></span></div>`:'';
@@ -3535,6 +3681,7 @@ function historyView(){
   if(tamper) notes.push(`${tamper[0]}번째 줄에서 기록을 지우거나 끄는 명령(${tamper[2]})이 실행됐습니다. 그 뒤에 친 명령은 이 파일에 없을 수 있으니 auditd 기록과 비교하세요.`);
   notes.push('bash 는 보통 로그아웃할 때 기록을 파일에 씁니다. 접속이 강제로 끊기면 마지막 명령들이 빠질 수 있습니다.');
   let rows = h.entries.map(([ln,ts,cmd])=>({ln,ts,cmd,e:bySrcLine[h.path+':'+ln]}));
+  if(st.range) rows = rows.filter(r=>r.ts==null || (r.ts>=st.range[0] && r.ts<st.range[1]));
   if(hv.risky) rows = rows.filter(r=>r.e && sr(r.e.sev)>=2);
   if(q) rows = rows.filter(r=>(r.cmd+' '+(r.e?explText(r.e):'')).toLowerCase().includes(q));
   const shown = rows.slice(0, 3000);
@@ -3633,9 +3780,11 @@ function sources(){
 
 /* ── 렌더 / 이벤트 ── */
 function render(){
+  refreshView();
   renderNav();
   const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView, files:filesView}[st.view];
-  $('#main').innerHTML = v();
+  $('#main').innerHTML = rangeBar() + v();
+  for(const id of ['rfrom','rto']){ const el = $('#'+id); if(el) el.onkeydown = ev=>{ if(ev.key==='Enter') document.querySelector('[data-act=rapply]').click(); }; }
   if(st.view==='timeline'){
     const q = $('#q'); let t;
     q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ st.q=q.value; st.limit=300; const pos=q.selectionStart; render(); const n=$('#q'); n.focus(); n.setSelectionRange(pos,pos); },160); };
@@ -3652,7 +3801,7 @@ function render(){
     const q = $('#fq'); let t;
     if(q) q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ fv.q=q.value; const pos=q.selectionStart; render(); const n=$('#fq'); n.focus(); n.setSelectionRange(pos,pos); },160); };
     const o = $('#fonly'); if(o) o.onchange = ev=>{ fv.only=ev.target.checked; render(); };
-    if(fv.focus){ const i=(D.files||[]).findIndex(f=>f.path===fv.focus); const el=document.getElementById('file-'+i); if(el){ el.scrollIntoView({block:'center'}); } }
+    if(fv.focus){ const i=(V.files||[]).findIndex(f=>f.path===fv.focus); const el=document.getElementById('file-'+i); if(el){ el.scrollIntoView({block:'center'}); } }
   }
   if(st.view==='history'){
     const q = $('#hq'); let t;
@@ -3686,6 +3835,10 @@ document.addEventListener('click', ev=>{
     case 'user': go('timeline',{user:v}); break;
     case 'clr': st[v]=null; render(); break;
     case 'clrrange': st.range=null; st.rangeLabel=null; render(); break;
+    case 'rapply': applyRange(dtParse($('#rfrom').value), $('#rto').value ? dtParse($('#rto').value)+60 : null); break;
+    case 'rquick': { const end = (M.range||[0,0])[1]+1; applyRange(end - (+v)*86400, end); break; }
+    case 'reanalyze': reanalyze(false); break;
+    case 'reanalyze-all': reanalyze(true); break;
     case 'binunit': ch.bin=v; try{ localStorage.setItem('secview-bin', v); }catch(_){} render(); break;
     case 'chartshow': ch.show=!ch.show; try{ localStorage.setItem('secview-chart', ch.show?'1':'0'); }catch(_){} render(); break;
     case 'bin': {
