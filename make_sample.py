@@ -330,8 +330,34 @@ def main():
         pgl.append(f'{pg(T("02:22:44"))} [3120] postgres@crm LOG:  statement: COPY {tb} (id, name, email, phone, created_at) TO stdout;')
     pgl.append(f'{pg(T("02:23:30"))} [3120] postgres@crm LOG:  disconnection: session time: 0:00:49.102 user=postgres database=crm host=[local]')
     write('var/log/postgresql/postgresql-16-main.log', '\n'.join(pgl) + '\n', mtime)
+    write('var/log/nginx/access.log', '\n'.join(access_log()) + '\n', mtime)
 
     print(f'샘플 로그 생성: {ROOT}')
+
+
+def access_log():
+    """nginx combined 형식의 평범한 웹 접속 기록 (화면 확인용, 공격 요청은 넣지 않음)"""
+    uas = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36',
+           'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+           'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15']
+    pages = [('/', 200, 18234), ('/shop/', 200, 22011), ('/shop/item/12', 200, 9120), ('/shop/item/7', 200, 8840),
+             ('/blog/autumn-sale/', 200, 15320), ('/static/style.css', 200, 4410), ('/static/banner.jpg', 200, 182330),
+             ('/favicon.ico', 200, 1150), ('/contact/', 200, 7720), ('/cart/', 200, 6340), ('/old-page/', 404, 162)]
+    visitors = [f'211.{random.randint(30, 250)}.{random.randint(1, 250)}.{random.randint(1, 250)}' for _ in range(18)] + [ADMIN]
+    rows = []
+    t = T('09:00:00', 2)
+    end = T('03:00:00')
+    while t < end:
+        ip = random.choice(visitors)
+        path, status, size = random.choice(pages)
+        rows.append((t, ip, 'GET', path, status, size + random.randint(0, 300), random.choice(uas)))
+        t += dt.timedelta(seconds=random.randint(20, 240))
+    # SSH 를 무차별 대입한 IP 가 그 전에 웹사이트도 둘러본 기록 (평범한 페이지 요청)
+    for k, path in enumerate(['/', '/shop/', '/contact/', '/robots.txt']):
+        rows.append((T('01:48:00') + dt.timedelta(seconds=k * 7), ATK, 'GET', path, 200, 5000 + k, 'curl/8.4.0'))
+    rows.sort()
+    return [f'{ip} - - [{tt.strftime("%d/%b/%Y:%H:%M:%S %z")}] "{m} {pth} HTTP/1.1" {st} {sz} "-" "{ua}"'
+            for tt, ip, m, pth, st, sz, ua in rows]
 
 
 if __name__ == '__main__':

@@ -55,6 +55,7 @@ sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/pass
 | 세션 | sshd pid, `wtmp`, audit `ses=` | 로그인~로그아웃 구간을 묶고, 그 안에서 실행된 명령/전송/덤프를 연결 |
 | 명령어 | `~/.bash_history`(타임스탬프 지원), `.zsh_history`, auditd `EXECVE`, sudo `COMMAND=` | 히스토리 ↔ auditd 자동 병합(파이프라인 원문 + 세션/IP) |
 | DB 덤프 | 명령어, MySQL general log, PostgreSQL 로그, `.mysql_history` | `mysqldump`/`pg_dump`/`mongodump`/`redis --rdb`, `SQL_NO_CACHE` 패턴, `pg_dump` 접속, `COPY TO`, `INTO OUTFILE`, DB 파일 직접 복사 |
+| 웹 접속 | nginx·apache `access.log` (combined/common, vhost 형식, 줄 끝 X-Forwarded-For) | 요청량·IP·상태 코드, 웹셸 의심 경로, SQL 인젝션·명령 실행·경로 조작·Log4Shell 시도, 404 대량 스캔, 스캐너 UA, 로그인 무차별 대입, 업로드, 대용량 백업 다운로드 |
 | 파일 전송 | 명령어, SFTP(`internal-sftp`), vsftpd/xferlog | 방향 구분 — **scp -f / SFTP read / curl -T / scp·rsync host: = 유출**, wget·curl = 반입 |
 | 지속성 | 명령어, `useradd`/`chpasswd` 로그, `/etc/passwd` | UID 0 계정, authorized_keys, crontab, systemd, rc.local |
 | 흔적 삭제 | 명령어, 로그 간 교차검증 | `history -c`, `unset HISTFILE`, 로그 삭제 — wtmp/audit 에는 있는데 auth.log 에 없는 로그인 |
@@ -77,6 +78,8 @@ sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/pass
 - **접속 방향**: ⬇ 들어온 접속(다른 곳 → 이 서버, auth.log 의 `from IP`)과 ⬆ 나간 접속(이 서버 → 다른 곳, 실행한
   ssh·scp·curl·wget·nc 명령과 `known_hosts`)을 나눠서 표시. 서버 IP 를 입력하면(또는 `--server-ip`, 로그에서 자동 감지)
   서버 자신에서 출발한 로그인을 구분하고, 직전에 `ssh` 를 실행한 세션을 "실제 출발지"로 연결
+- **웹 접속**: access log 요약 — 시간별 요청량(의심 요청 강조), 웹셸 의심 경로, 의심 요청 목록(유형별 필터), 접속 IP 순위
+  (SSH 로도 들어온 IP 표시), 큰 응답, 많이 요청된 경로, **전체 요청 검색**(IP·주소·상태·UA; 5만 건이 넘으면 의심 IP 의 요청만 보관)
 - **파일 추적**: 파일마다 저장 → 압축 → 이동·복사 → 외부 유출(scp·SFTP·curl·rsync·nc) → 삭제 이력을 시간순으로
 - **세션**: `root@45.133.1.77` 같은 로그인 단위로 그 세션에서 한 일을 순서대로
 - **히스토리**: `.bash_history` 등 원문을 줄 번호와 함께 열람. 줄마다 위험도·해설, 실행 시각(있을 때), 기록 삭제 명령 이후 구간 경고

@@ -24,6 +24,7 @@ import datetime as dt
 import fnmatch
 import glob
 import gzip
+import heapq
 import hashlib
 import http.server
 import ipaddress
@@ -63,6 +64,7 @@ CATS = {
     'recon':        '정찰',
     'lateral':      '나간 접속',
     'fileop':       '파일 작업',
+    'web':          '웹 공격',
 }
 
 # ───────────────────────── 명령어 분류 규칙 ─────────────────────────
@@ -970,16 +972,77 @@ def file_ops(cmd, cwd=None):
     return ops
 
 
+# ───────────────────────── 웹 서버 access log ─────────────────────────
+WEB_RX = re.compile(r'^(?:(?P<vhost>[\w.\-]+(?::\d+)?)\s+)?(?P<ip>[0-9a-fA-F:.]+)\s+\S+\s+(?P<user>\S+)\s+\[(?P<time>[^\]]+)\]\s+'
+                    r'"(?P<req>(?:[^"\\]|\\.)*)"\s+(?P<status>\d{3})\s+(?P<size>\d+|-)'
+                    r'(?:\s+"(?P<ref>(?:[^"\\]|\\.)*)"\s+"(?P<ua>(?:[^"\\]|\\.)*)")?')
+# (유형, 기본 위험도, 이름, 정규식)  — 디코딩한 요청 주소(경로+쿼리)에 적용
+WEB_RULES = [(t, sv, l, re.compile(rx)) for t, sv, l, rx in [
+    ('log4shell', 'high', 'Log4Shell 시도', r'(?i)\$\{\s*(?:jndi|\$\{lower:j)'),
+    ('shellshock', 'high', 'Shellshock 시도', r'\(\)\s*\{\s*:\s*;\s*\}'),
+    ('rce', 'high', '명령 실행 시도',
+     r'(?i)(?:[;|`]|\$\(|%0a)\s*(?:id|whoami|uname|cat|wget|curl|bash|sh|nc|ncat|python3?|perl|echo|ls|ping)\b|/bin/(?:ba)?sh\b'
+     r'|[?&](?:cmd|exec|command|execute|run)=|system\(|passthru\(|shell_exec\(|proc_open\(|popen\(|base64_decode\(|eval\(|assert\('),
+    ('sqli', 'high', 'SQL 인젝션 시도',
+     r"(?i)union(?:\s|/\*.*?\*/|\+)+(?:all(?:\s|\+)+)?select\b|'\s*(?:or|and)\s+'?\d+'?\s*=\s*'?\d|\bor\s+1\s*=\s*1\b|\bsleep\s*\(\s*\d|benchmark\s*\("
+     r"|information_schema|extractvalue\s*\(|updatexml\s*\(|load_file\s*\(|into\s+(?:out|dump)file|waitfor\s+delay|'\s*--|\bselect\b.+\bfrom\b.+\bwhere\b"),
+    ('lfi', 'high', '경로 조작·서버 파일 읽기 시도', r'(?i)\.\./|\.\.\\|/etc/(?:passwd|shadow|hosts)|php://|file://|expect://|data://text|/proc/self/(?:environ|cmdline)|win\.ini'),
+    ('sensitive', 'med', '민감 파일 요청',
+     r'(?i)/\.(?:env|git/|git$|svn/|htpasswd|htaccess|aws/|ssh/|DS_Store|bash_history)|wp-config\.php(?:\.|~|$)|\.php\.(?:bak|old|save|swp|orig)$'
+     r'|/(?:phpinfo|info|test)\.php$|/server-status|/(?:backup|bak|dump|db|database|site|www|html|data)[\w.\-]*\.(?:sql|zip|tar|tgz|gz|7z|rar|bak)$|\.sql(?:\.gz)?$'),
+    ('xss', 'low', 'XSS 시도', r'(?i)<script|javascript:|onerror\s*=|onload\s*=|alert\s*\(|<svg'),
+    ('admin', 'info', '관리 페이지 접근', r'(?i)/(?:wp-login\.php|wp-admin|xmlrpc\.php|administrator|phpmyadmin|pma|manager/html|adminer\.php|admin)(?:/|\?|$|\.php)'),
+]]
+WEBSHELL_PATH = re.compile(r'(?i)/(?:wp-content/uploads|uploads?|files|images?|img|tmp|temp|cache|media|static|assets|attachments?|upfiles?)/'
+                           r'[^?]*\.(?:php\d?|phtml|phar|pht|jsp|jspx|aspx?|ashx|cgi|pl)(?:$|\?)'
+                           r'|/(?:shell|cmd|c99|r57|wso|b374k|alfa|bypass|up|upl|uploader|xx?|sh|1|indoxploit|marijuana|mini|webshell|backdoor|sys|config1)\.(?:php\d?|jsp|aspx?)(?:$|\?)')
+WEB_UPLOAD = re.compile(r'(?i)upload|async-upload\.php|media-new\.php|file-?manager|elfinder|/plupload|kcfinder|ckfinder')
+WEB_LOGIN = re.compile(r'(?i)/(?:wp-login\.php|xmlrpc\.php|login|signin|sign-in|user/login|admin/login|auth|session)(?:\.php)?(?:$|\?|/)')
+SCANNER_UA = re.compile(r'(?i)sqlmap|nikto|nmap|masscan|zgrab|gobuster|dirbuster|\bdirb\b|ffuf|wfuzz|wpscan|nuclei|acunetix|nessus|openvas|netsparker'
+                        r'|burp|hydra|feroxbuster|whatweb|zmeu|morfeus|jorgee|l9explore|censys|expanse|internet-?measurement')
+TOOL_UA = re.compile(r'(?i)^(?:curl|wget|python-requests|python-urllib|go-http-client|libwww-perl|java/|okhttp|httpclient|\-)')
+BACKUP_EXT = re.compile(r'(?i)\.(?:sql|zip|tar|tgz|gz|7z|rar|bak|dump)(?:$|\?)')
+WEB_TYPE_LABEL = {t: l for t, _, l, _ in WEB_RULES}
+WEB_TYPE_LABEL.update({'webshell': '웹셸 의심', 'exfil': '대용량 백업 다운로드', 'scan': '경로 대량 탐색(스캔)', 'scanner': '스캐너·해킹 도구',
+                       'brute': '웹 로그인 무차별 대입', 'upload': '파일 업로드', 'bigdl': '대용량 다운로드'})
+WEB_NOTES = {
+    'webshell': '업로드 폴더 안의 스크립트(.php 등)나 웹셸에 흔한 이름의 파일에 요청했습니다. 웹셸은 브라우저로 서버 명령을 실행하는 백도어입니다. '
+                '응답이 200 이면 실제로 실행됐을 가능성이 높고, POST 나 cmd= 같은 파라미터가 있으면 명령을 보낸 것입니다. '
+                '이 파일을 확보·삭제하고, 언제 어떤 요청으로 올라왔는지(업로드 요청)를 앞쪽에서 찾아보세요.',
+    'rce': '주소나 파라미터에 셸 명령(;id, |wget …, cmd=)을 끼워 넣어 서버에서 실행시키려는 시도입니다. 상태가 200 이고 응답 크기가 평소와 다르면 성공했을 수 있습니다.',
+    'sqli': '주소 파라미터에 SQL 구문(UNION SELECT, OR 1=1, sleep() 등)을 넣어 DB 내용을 빼내려는 시도(SQL 인젝션)입니다. '
+            '같은 IP 가 수십~수백 번 반복하면 sqlmap 같은 자동 도구입니다. 200 응답의 크기가 유난히 크면 데이터가 새어 나갔을 수 있습니다.',
+    'lfi': '../ 나 /etc/passwd, php:// 처럼 웹 폴더 밖의 서버 파일을 읽으려는 시도입니다. 200 응답이면 파일 내용이 노출됐을 수 있습니다.',
+    'sensitive': '.env, .git, 설정 백업, DB 덤프처럼 비밀번호나 소스가 담긴 파일을 직접 요청했습니다. 상태가 200 이면 실제로 내려받아 간 것입니다.',
+    'exfil': '웹 경로를 통해 큰 백업·DB 파일이 내려받아졌습니다(200 응답). 공격자가 서버에 만들어 둔 덤프를 웹으로 가져갔을 수 있습니다.',
+    'bigdl': '평소보다 매우 큰 응답이 나갔습니다. 어떤 파일인지 확인하세요.',
+    'scan': '같은 IP 가 짧은 시간에 존재하지 않는 주소를 대량으로 요청했습니다(404). 숨겨진 관리 페이지·백업 파일·취약한 플러그인을 찾는 자동 스캔입니다.',
+    'scanner': '요청의 User-Agent 에 보안 점검·해킹 도구 이름이 찍혀 있습니다. 공격 준비 단계의 자동 스캔입니다.',
+    'brute': '로그인 주소에 POST 요청을 대량으로 보냈습니다. 웹 관리자 계정 무차별 대입입니다. 중간에 302(이동)나 200 으로 응답이 달라지면 로그인에 성공했을 수 있습니다.',
+    'upload': '파일 업로드 요청입니다. 바로 뒤에 업로드 폴더의 .php 파일 요청이 이어지면 웹셸을 올린 것입니다.',
+    'log4shell': '${jndi:…} 문자열로 Java(Log4j) 서버가 외부 주소에 접속해 코드를 받아 실행하게 만드는 공격(Log4Shell) 시도입니다.',
+    'shellshock': '() { :; } 형태로 bash 취약점(Shellshock)을 이용해 CGI 에서 명령을 실행하려는 시도입니다.',
+    'xss': '주소에 스크립트를 넣어 다른 사용자의 브라우저에서 실행시키려는 시도(XSS)입니다. 서버 침입과는 직접 관련이 적습니다.',
+    'admin': '관리자 페이지에 접근했습니다. 외부 IP 라면 접근 제한이 필요한지 확인하세요.',
+}
+
+
 def event_note(e):
     """명령이 아닌 이벤트(로그인, 전송, 덤프 감지 등)가 무슨 뜻인지 설명"""
     k, tags = e.get('kind'), e.get('tags') or []
+    if k == 'web':
+        return WEB_NOTES.get(e.get('webtype'))
     if k == 'login_ok':
         if e.get('self_origin'):
             o = e.get('origin')
+            w = e.get('web_origin')
             base = ('이 서버 안에서 출발한 SSH 접속입니다(출발지 IP 가 이 서버 자신). 그래서 이 IP 는 공격자의 실제 위치가 아닙니다. ')
             if o:
                 return base + (f'바로 앞서 세션 {o.get("sid") or "?"}' + (f'({o["ip"]} 에서 들어온 접속)' if o.get('ip') else '')
                                + f' 에서 "{_shorten(o["cmd"], 40)}" 를 실행한 기록이 있어, 그 사람이 서버 안에서 다시 접속한 것으로 보입니다.')
+            if w:
+                return base + (f'직전 {w.get("ago", "?")} 전에 {w.get("ip")} 에서 웹셸 의심 요청("{_shorten(w.get("cmd") or "", 50)}")이 있었습니다. '
+                               '웹셸로 서버 안에서 ssh 를 실행해 들어왔을 가능성이 있습니다.')
             return base + ('같은 시각에 열려 있던 다른 세션, auditd 의 ssh 실행 기록, 웹셸(웹 서버 로그), 자동화 스크립트(cron)를 확인해 '
                            '실제로 누가 접속을 시작했는지 찾아야 합니다.')
         if '백도어 계정' in tags:
@@ -1177,6 +1240,7 @@ class Analyzer:
         self.uid0_alias = set()
         self.histories = []
         self.known_hosts = []
+        self.web = None
         self.server_ips = {x.strip() for x in server_ips if x and x.strip()}
         self.server_ips_auto = set()
         self.has_auth = False
@@ -1258,6 +1322,7 @@ class Analyzer:
         self.scan_postgres()
         self.scan_ftp()
         self.scan_known_hosts()
+        self.scan_web()
         if self.since:
             self.events = [e for e in self.events if e['ts'] is None or e['ts'] >= self.since]
         if self.until:
@@ -1840,6 +1905,226 @@ class Analyzer:
                                  + human_bytes(size), kind='ftp_xfer', user=user, ip=ip, cmd=path, src=rp, line=i, raw=raw)
             self.source(rp, 'FTP', before)
 
+    def scan_web(self):
+        files = self.paths('var/log/nginx/*access*', 'var/log/apache2/*access*', 'var/log/httpd/*access*',
+                           'var/log/apache/*access*', 'var/log/lighttpd/*access*', 'var/log/www/*access*', 'var/log/web/*.log*')
+        if not files:
+            return
+        W = {'files': [], 'total': 0, 'status': Counter(), 'hourly': Counter(), 'hourly_s': Counter(), 'paths': Counter(),
+             'ips': {}, 'shells': {}, 'reqs': [], 'reqs_cut': 0, 'skipped': 0, 'all': [], 'big': [], 'proxied': 0}
+        clusters = {}
+        for p in files:
+            f = self.safe_open(p)
+            if not f:
+                continue
+            rp = self.rel(p)
+            before, n = len(self.events), 0
+            with f:
+                for i, line in enumerate(f, 1):
+                    m = WEB_RX.match(line)
+                    if not m:
+                        W['skipped'] += 1
+                        continue
+                    try:
+                        ts = dt.datetime.strptime(m['time'], '%d/%b/%Y:%H:%M:%S %z').timestamp()
+                    except ValueError:
+                        continue
+                    if (self.since and ts < self.since) or (self.until and ts >= self.until):
+                        continue
+                    n += 1
+                    self.web_line(W, clusters, ts, m, line.rstrip('\n'), rp, i)
+            W['files'].append({'path': rp, 'requests': n})
+            self.source(rp, '웹 접근 로그', before)
+        self.web_finish(W)
+
+    def web_line(self, W, clusters, ts, m, raw, src, line):
+        ip, status = m['ip'], int(m['status'])
+        xff = re.search(r'"\s*([0-9a-fA-F:.]{7,45})(?:\s*,\s*[0-9a-fA-F:.]+)*\s*"\s*$', raw[m.end():])
+        if xff and xff.group(1) != ip and is_private(ip) and not is_private(xff.group(1)):
+            ip = xff.group(1)          # 앞단 프록시 IP 대신 X-Forwarded-For 의 실제 접속 IP
+            W['proxied'] += 1
+        size = int(m['size']) if m['size'] and m['size'] != '-' else 0
+        req = m['req'].replace('\\"', '"')
+        parts = req.split(' ')
+        method = parts[0] if len(parts) >= 2 else '-'
+        target = parts[1] if len(parts) >= 2 else req
+        dec = target
+        for _ in range(2):
+            try:
+                d2 = urllib.parse.unquote_plus(dec)
+            except Exception:
+                break
+            if d2 == dec:
+                break
+            dec = d2
+        path = dec.split('?', 1)[0]
+        ua, ref = (m['ua'] or ''), (m['ref'] or '')
+        row = [ts, ip, method, dec[:300], status, size, ua[:160], 0]
+        kept = len(W['all']) < 300000
+        if kept:
+            W['all'].append(row)
+        if size > 0:
+            item = (size, ts, ip, method, dec[:300], status)
+            if len(W['big']) < 30:
+                heapq.heappush(W['big'], item)
+            elif size > W['big'][0][0]:
+                heapq.heapreplace(W['big'], item)
+        W['total'] += 1
+        W['status'][status] += 1
+        hour = int(ts // 3600 * 3600)
+        W['hourly'][hour] += 1
+        if len(W['paths']) < 200000 or path in W['paths']:
+            W['paths'][path] += 1
+        st = W['ips'].get(ip)
+        if st is None:
+            st = W['ips'][ip] = {'ip': ip, 'n': 0, 'susp': 0, 'n404': 0, 'n4xx': 0, 'n5xx': 0, 'post': 0, 'bytes': 0, 'types': Counter(),
+                                 'ua': Counter(), 'first': ts, 'last': ts, 'first404': None, 'login_post': 0, 'first_login': None}
+        st['n'] += 1
+        st['bytes'] += size
+        st['first'], st['last'] = min(st['first'], ts), max(st['last'], ts)
+        if len(st['ua']) < 20:
+            st['ua'][ua[:160]] += 1
+        if status == 404:
+            st['n404'] += 1
+            st['first404'] = st['first404'] or ts
+        if 400 <= status < 500:
+            st['n4xx'] += 1
+        if status >= 500:
+            st['n5xx'] += 1
+        if method == 'POST':
+            st['post'] += 1
+            if WEB_LOGIN.search(path):
+                st['login_post'] += 1
+                st['first_login'] = st['first_login'] or ts
+
+        types, sev = [], 0
+        whole = dec + ' ' + ua + ' ' + ref
+        for t, sv, l, rx in WEB_RULES:
+            if rx.search(whole if t in ('log4shell', 'shellshock') else dec):
+                types.append(t)
+                sev = max(sev, SEV_RANK[sv])
+        if WEBSHELL_PATH.search(dec) and not re.search(r'(?i)\.(?:jpe?g|png|gif|css|js|woff2?|svg|ico)$', path):
+            types.insert(0, 'webshell')
+            sev = max(sev, SEV_RANK['crit'] if (200 <= status < 300 and (method == 'POST' or 'rce' in types)) else SEV_RANK['high'])
+            sh = W['shells'].setdefault(path, {'path': path, 'n': 0, 'post': 0, 'ips': [], 'first': ts, 'last': ts, 'status': Counter()})
+            sh['n'] += 1
+            sh['post'] += method == 'POST'
+            if ip not in sh['ips'] and len(sh['ips']) < 20:
+                sh['ips'].append(ip)
+            sh['first'], sh['last'] = min(sh['first'], ts), max(sh['last'], ts)
+            sh['status'][status] += 1
+        if 200 <= status < 300 and size >= 10 * 1024 * 1024:
+            if BACKUP_EXT.search(path):
+                types.append('exfil')
+                sev = max(sev, SEV_RANK['crit'])
+            elif size >= 50 * 1024 * 1024:
+                types.append('bigdl')
+                sev = max(sev, SEV_RANK['med'])
+        if method == 'POST' and WEB_UPLOAD.search(path):
+            types.append('upload')
+            sev = max(sev, SEV_RANK['low'])
+        if 'sensitive' in types and 200 <= status < 300:
+            sev = max(sev, SEV_RANK['high'])
+        if 'exfil' in types:       # 백업 파일이 실제로 크게 나갔으면 그게 가장 중요한 사실
+            types.remove('exfil')
+            types.insert(0, 'exfil')
+        if types == ['admin']:
+            return
+        if not types:
+            return
+        st['susp'] += 1
+        row[7] = 1
+        if not kept:
+            W['all'].append(row)
+        for t in types:
+            st['types'][t] += 1
+        W['hourly_s'][hour] += 1
+        sevn = SEVS[sev]
+        if len(W['reqs']) < 30000:
+            W['reqs'].append({'ts': ts, 'ip': ip, 'm': method, 'u': dec[:400], 'st': status, 'sz': size, 'ua': ua[:200],
+                              'ty': types, 'sev': sevn, 'src': src, 'line': line})
+        else:
+            W['reqs_cut'] += 1
+        # 타임라인용: 같은 IP·유형·경로는 10분 안이면 한 줄로 묶는다
+        main = types[0]
+        key = (ip, main, path if main in ('webshell', 'exfil', 'sensitive', 'upload') else '')
+        c = clusters.get(key)
+        if c and ts - c['until'] <= (120 if main == 'webshell' else 600):
+            c['count'] += 1
+            c['until'] = ts
+            c['statuses'][status] += 1
+            if SEV_RANK[sevn] > SEV_RANK[c['sev']]:
+                c['sev'] = sevn
+            return
+        e = self.add(ts, 'web', sevn, WEB_TYPE_LABEL[main], kind='web', webtype=main, ip=ip, cmd=f'{method} {dec[:300]}',
+                     raw=raw[:2000], src=src, line=line, path=path, status=status,
+                     tags=[WEB_TYPE_LABEL[t] for t in types[1:] if t != 'admin'] + [f'HTTP {status}'])
+        e['count'], e['until'], e['statuses'] = 1, ts, Counter({status: 1})
+        clusters[key] = e
+
+    def web_finish(self, W):
+        for e in self.events:
+            if e.get('kind') == 'web':
+                cnt = e.pop('count', 1)
+                sts = e.pop('statuses', Counter())
+                if cnt > 1:
+                    e['msg'] += f' {cnt}회'
+                    e['count'] = cnt
+                    ok = sum(v for k, v in sts.items() if 200 <= k < 300)
+                    e.setdefault('tags', []).append(f'성공(2xx) {ok}회' if ok else '모두 실패 응답')
+                else:
+                    e.pop('until', None)
+        for ip, st in W['ips'].items():
+            if st['n404'] >= 30 and st['n404'] >= st['n'] * 0.3:
+                self.add(st['first404'], 'web', 'med', f'{WEB_TYPE_LABEL["scan"]} — 404 {st["n404"]}회', kind='web', webtype='scan', ip=ip,
+                         count=st['n404'], until=st['last'], tags=[f'전체 요청 {st["n"]}회'])
+                st['types']['scan'] += 1
+            tool = next((u for u in st['ua'] if SCANNER_UA.search(u)), None)
+            if tool:
+                self.add(st['first'], 'web', 'low', f'{WEB_TYPE_LABEL["scanner"]}: {SCANNER_UA.search(tool).group(0)}', kind='web',
+                         webtype='scanner', ip=ip, cmd=tool, count=st['ua'][tool], tags=[f'요청 {st["n"]}회'])
+                st['types']['scanner'] += 1
+                st['scanner'] = SCANNER_UA.search(tool).group(0)
+            if st['login_post'] >= 20:
+                self.add(st['first_login'], 'web', 'high', f'{WEB_TYPE_LABEL["brute"]} — 로그인 POST {st["login_post"]}회', kind='web',
+                         webtype='brute', ip=ip, count=st['login_post'])
+                st['types']['brute'] += 1
+        ips = []
+        for st in W['ips'].values():
+            st['types'] = dict(st['types'])
+            st['ua'] = [u for u, _ in st['ua'].most_common(3)]
+            st['private'] = is_private(st['ip'])
+            for k in ('first404', 'first_login'):
+                st.pop(k, None)
+            ips.append(st)
+        ips.sort(key=lambda x: (-len(x['types']), -x['susp'], -x['n']))
+        shells = sorted(W['shells'].values(), key=lambda x: (-x['post'], -x['n']))
+        for sh in shells:
+            sh['status'] = dict(sh['status'])
+        hours = sorted(set(W['hourly']) | set(W['hourly_s']))
+        # 전체 요청 원문: 적으면 전부, 많으면 의심 IP(공격 유형이 하나라도 잡힌 IP)의 요청만
+        allr = W['all']
+        if len(allr) <= WEB_ROWS_CAP and len(allr) == W['total']:
+            keep, mode = allr, 'all'
+        else:
+            hot = {x['ip'] for x in ips if x['types']}
+            keep, mode = [r for r in allr if r[1] in hot or r[7]][:WEB_ROWS_CAP], 'hot'
+        ip_idx, ua_idx = {}, {}
+        data = []
+        for r in keep:
+            data.append([r[0], ip_idx.setdefault(r[1], len(ip_idx)), r[2], r[3], r[4], r[5], ua_idx.setdefault(r[6], len(ua_idx)), r[7]])
+        rows = {'ips': list(ip_idx), 'uas': list(ua_idx), 'data': data, 'total': W['total'], 'kept': len(data), 'mode': mode}
+        big = [{'sz': b[0], 'ts': b[1], 'ip': b[2], 'm': b[3], 'u': b[4], 'st': b[5]} for b in sorted(W['big'], reverse=True)]
+        self.web = {
+            'rows': rows, 'big': big, 'proxied': W['proxied'],
+            'files': W['files'], 'total': W['total'], 'unique_ips': len(W['ips']), 'status': {str(k): v for k, v in W['status'].most_common()},
+            'hourly': [[h, W['hourly'][h], W['hourly_s'][h]] for h in hours],
+            'top_paths': W['paths'].most_common(20), 'ips': ips[:300], 'ips_more': max(0, len(ips) - 300),
+            'shells': shells[:100], 'reqs': W['reqs'], 'reqs_cut': W['reqs_cut'], 'skipped': W['skipped'],
+        }
+        if W['proxied']:
+            self.notes.append(f'웹 로그 {W["proxied"]}건은 프록시 뒤에서 기록돼, X-Forwarded-For 의 실제 접속 IP 로 바꿔 분석했습니다.')
+
     def scan_known_hosts(self):
         for p in self.paths('root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*'):
             rp = self.rel(p)
@@ -2149,6 +2434,14 @@ class Analyzer:
                     e['origin'] = o
                     if s:
                         s['origin_sid'] = o.get('sid')
+                else:
+                    webs = [w for w in ev if w.get('kind') == 'web' and w['ts'] is not None and e['ts'] - 900 <= w['ts'] <= e['ts']
+                            and w.get('webtype') in ('webshell', 'rce')]
+                    if webs:
+                        w = webs[-1]
+                        e['web_origin'] = w
+                        if s:
+                            s['web_origin'] = True
         for e in ev:
             for d in e.get('dest', []):
                 d['kind'] = host_kind(d['host'], self_ips)
@@ -2159,10 +2452,14 @@ class Analyzer:
                 index[id(e)] = len(out_events)
                 out_events.append(e)
         for n, e in enumerate(out_events):
-            o = e.get('origin')
+            o, w = e.get('origin'), e.get('web_origin')
             e = {k: v for k, v in e.items() if k not in ('seq', 'argv0', 'hidden', 'dup', 'users')}
             if o:
                 e['origin'] = {'i': index.get(id(o)), 'sid': o.get('sid'), 'ip': o.get('ip'), 'cmd': o.get('cmd')}
+            if w:
+                ago = int(e['ts'] - w['ts'])
+                e['web_origin'] = {'i': index.get(id(w)), 'ip': w.get('ip'), 'cmd': w.get('cmd'),
+                                   'ago': f'{ago // 60}분 {ago % 60}초' if ago >= 60 else f'{ago}초'}
             annotate(e)
             out_events[n] = e
 
@@ -2240,6 +2537,10 @@ class Analyzer:
             a['whats'] = a['whats'].most_common()
         for p in ips:
             p['self'] = host_kind(p['ip'], self_ips) == 'self'
+        if self.web:
+            ssh_ips = {e.get('ip') for e in ev if e.get('kind') in ('login_ok', 'login_fail', 'invalid')}
+            for w in self.web['ips']:
+                w['ssh'] = w['ip'] in ssh_ips
         tss = [e['ts'] for e in out_events if e['ts'] is not None]
         off = self.tz.utcoffset(dt.datetime.now()).total_seconds() / 60
         return {
@@ -2259,6 +2560,7 @@ class Analyzer:
             'histories': self.histories,
             'outbound': outbound,
             'files': file_list,
+            'web': self.web,
             'known_hosts': self.known_hosts,
         }
 
@@ -2277,7 +2579,8 @@ def empty_data(tz):
 
 # ───────────────────────── 웹 업로드 ─────────────────────────
 # 브라우저에서 올린 파일(개별 파일, 폴더, zip/tar.gz)을 임시 디렉터리에 / 구조로 배치한 뒤 Analyzer 로 분석한다.
-SCAN_GLOBS = ['root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*', 'var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
+SCAN_GLOBS = ['var/log/nginx/*access*', 'var/log/apache2/*access*', 'var/log/httpd/*access*', 'var/log/apache/*access*',
+              'var/log/lighttpd/*access*', 'var/log/www/*access*', 'root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*', 'var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
               'root/.*_history', 'root/.history', 'home/*/.*_history', 'home/*/.history', 'var/lib/*/.*_history',
               'srv/*/.*_history', 'var/log/mysql/*.log*', 'var/log/mysql*.log*', 'var/log/mariadb/*.log*',
               'var/lib/mysql/*.log', 'var/log/postgresql/*.log*', 'var/lib/pgsql/*.log', 'var/lib/postgresql/*.log',
@@ -2287,6 +2590,7 @@ AUTH_PROGS = {'sshd', 'sudo', 'su', 'useradd', 'usermod', 'userdel', 'passwd', '
               'internal-sftp', 'sftp-server'}
 ARCHIVE_RX = re.compile(r'\.(?:tar|tar\.gz|tgz|tar\.bz2|tbz2?|tar\.xz|txz)$', re.I)
 MAX_UPLOAD = 8 * 1024 ** 3
+WEB_ROWS_CAP = 50000      # 웹 요청 원문을 리포트에 넣는 최대 건수 (넘으면 의심 IP 의 요청만)
 
 
 def _is_gz(path):
@@ -2317,6 +2621,8 @@ def sniff(path, name):
         return 'mysql', gz
     if any(Analyzer.PG_RX.match(l) for l in lines):
         return 'pg', gz
+    if sum(1 for l in lines[:50] if WEB_RX.match(l)) >= max(1, min(len(lines), 50) // 2):
+        return 'web', gz
     if any(re.search(r'(?:OK|FAIL) (?:DOWNLOAD|UPLOAD|LOGIN):|^\w{3} \w{3}\s+\d+ [\d:]+ \d{4} \d+ \S+ \d+ ', l) for l in lines):
         return 'ftp', gz
     return None, gz
@@ -2348,7 +2654,8 @@ def place_target(name, path, n):
             user = None
         return f'home/{user}/.{m[1]}_history' if user else f'root/.{m[1]}_history'
     for rx, d in ((r'^(?:auth\.log|secure)', 'var/log/'), (r'^audit\.log', 'var/log/audit/'), (r'^[wb]tmp', 'var/log/'),
-                  (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/'), (r'^known_hosts', 'root/.ssh/')):
+                  (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/'), (r'^known_hosts', 'root/.ssh/'),
+                  (r'^(?:access[._-]?log|access_log|.*[._-]access[._-]?log)', 'var/log/nginx/')):
         if re.match(rx, bl):
             return d + b + gzs
     # 3) 내용 (messages, syslog, 이름이 바뀐 파일 등)
@@ -2356,7 +2663,7 @@ def place_target(name, path, n):
     gzs = '.gz' if gz else ''
     return {'auth': f'var/log/auth.log.{n}{gzs}', 'audit': f'var/log/audit/audit.log.{n}{gzs}',
             'mysql': f'var/log/mysql/upload{n}.log{gzs}', 'pg': f'var/log/postgresql/upload{n}.log{gzs}',
-            'ftp': f'var/log/xferlog.{n}{gzs}', 'wtmp': f'var/log/wtmp.{n}', 'btmp': f'var/log/btmp.{n}'}.get(kind)
+            'ftp': f'var/log/xferlog.{n}{gzs}', 'web': f'var/log/nginx/access.log.{n}{gzs}', 'wtmp': f'var/log/wtmp.{n}', 'btmp': f'var/log/btmp.{n}'}.get(kind)
 
 
 class UploadJob:
@@ -2449,8 +2756,10 @@ class UploadJob:
                 e['src'] = rename(e['src'])
         for s in data['meta']['sources']:
             s['path'] = rename(s['path'])
-        for h in data['histories'] + data['known_hosts']:
+        for h in data['histories'] + data['known_hosts'] + ((data.get('web') or {}).get('files') or []):
             h['path'] = rename(h['path'])
+        for r in ((data.get('web') or {}).get('reqs') or []):
+            r['src'] = rename(r['src'])
         data['meta']['root'] = f'웹 업로드 ({len(self.names)}개 파일)'
         return data
 
@@ -2486,6 +2795,14 @@ def serve(data, bind, port, open_browser=False):
         def do_POST(self):
             u = urllib.parse.urlparse(self.path)
             q = urllib.parse.parse_qs(u.query)
+            if u.path == '/api/reset':
+                for j in list(jobs.values()):
+                    shutil.rmtree(j.dir, ignore_errors=True)
+                jobs.clear()
+                state['job'] = None
+                state['data'] = empty_data(tz_from_str('local'))
+                print('[*] 초기화: 올린 로그와 분석 결과를 모두 지웠습니다.')
+                return self.send(200, state['data'])
             job_id = q.get('job', [''])[0]
             if not re.fullmatch(r'[0-9a-f]{16,40}', job_id):
                 return self.send(400, {'error': 'job id 오류'})
@@ -2635,7 +2952,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   --crit:#ff4d5e;--high:#ff9a3d;--med:#e9c04a;--low:#58a6ff;--info:#6b7787;
   --crit-bg:rgba(255,77,94,.10);--high-bg:rgba(255,154,61,.07);
   --c-auth:#5b9dff;--c-session:#8f86f0;--c-cmd:#94a3b8;--c-db:#ff5f9e;--c-transfer:#ff9a3d;
-  --c-persist:#c78bff;--c-antiforensic:#ff4d5e;--c-exec:#f97316;--c-privesc:#e9c04a;--c-recon:#34c47c;--c-lateral:#22d3ee;--c-fileop:#d6a35c;
+  --c-persist:#c78bff;--c-antiforensic:#ff4d5e;--c-exec:#f97316;--c-privesc:#e9c04a;--c-recon:#34c47c;--c-lateral:#22d3ee;--c-fileop:#d6a35c;--c-web:#a3e635;
   --mono:ui-monospace,"Cascadia Mono","D2Coding",Consolas,"SFMono-Regular",monospace;
   --sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:dark;
@@ -2646,7 +2963,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   --crit:#d92638;--high:#d9690f;--med:#a77d00;--low:#2563eb;--info:#7a8594;
   --crit-bg:rgba(217,38,56,.07);--high-bg:rgba(217,105,15,.05);
   --c-auth:#2563eb;--c-session:#6d5ae6;--c-cmd:#64748b;--c-db:#d6337a;--c-transfer:#d9690f;
-  --c-persist:#9a4ee0;--c-antiforensic:#d92638;--c-exec:#c2410c;--c-privesc:#a77d00;--c-recon:#15803d;--c-lateral:#0e7490;--c-fileop:#92400e;
+  --c-persist:#9a4ee0;--c-antiforensic:#d92638;--c-exec:#c2410c;--c-privesc:#a77d00;--c-recon:#15803d;--c-lateral:#0e7490;--c-fileop:#92400e;--c-web:#4d7c0f;
   color-scheme:light;
 }
 *{box-sizing:border-box}
@@ -2675,7 +2992,8 @@ h2{font-size:15px;margin:0 0 10px;font-weight:700;letter-spacing:-.01em}
 h2 small{font-weight:500;color:var(--muted);font-size:12.5px;margin-left:6px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
 .grid2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start}
-@media (max-width:1000px){.grid2{grid-template-columns:1fr}}
+.grid2>*{min-width:0}
+@media (max-width:1000px){.grid2{grid-template-columns:minmax(0,1fr)}}
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
 
 @media (max-width:560px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -2905,6 +3223,13 @@ h2.sect small{margin:0}
 .ftl .how{color:var(--muted);min-width:0;word-break:break-all}
 .ftl .fwho{color:var(--faint);font-size:12px}
 @media (max-width:640px){.ftl li{grid-template-columns:auto minmax(0,1fr)}.ftl .how{grid-column:1/-1}.ftl .fwho{display:none}}
+/* 웹 접속 */
+.hs{display:inline-block;font:600 11.5px var(--mono);padding:0 6px;border-radius:4px;border:1px solid var(--line);background:var(--panel2)}
+.hs.s2{color:var(--c-recon)}
+.hs.s3{color:var(--muted)}
+.hs.s4{color:var(--high);border-color:color-mix(in srgb,var(--high) 40%,transparent)}
+.hs.s5{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
+td.ua{font-size:11.5px;color:var(--faint);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 히스토리 */
 .hgrid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:860px){.hgrid{grid-template-columns:1fr}}
@@ -3093,6 +3418,7 @@ if(!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme:
 
 function renderNav(){
   const VIEWS = [['overview','개요'],['timeline','타임라인',ER.length],['ips','접속 방향',V.ips.length+(V.outbound||[]).length],['sessions','세션',V.sessions.length],['files','파일 추적',(V.files||[]).length],
+    ...(D.web ? [['web','웹 접속',D.web.total]] : []),
     ['history','히스토리',HIST.length],['sources','로그 소스',M.sources.length],['guide','로그 가이드'],['upload','⤒ 로그 불러오기']];
   $('#nav').innerHTML = VIEWS.map(([k,l,n])=>`<button data-act="view" data-v="${k}" class="${st.view===k?'on':''}">${l}${n!=null?`<span class="n">${n.toLocaleString()}</span>`:''}</button>`).join('');
 }
@@ -3115,6 +3441,7 @@ const SUPPORTED = [
   ['PostgreSQL 로그', '/var/log/postgresql', 'pg_dump 접속, COPY TO 추출'],
   ['xferlog, vsftpd.log', '/var/log', 'FTP 업로드·다운로드'],
   ['passwd', '/etc', 'UID 0 백도어 계정 확인, uid→계정명'],
+  ['access.log (nginx·apache)', '/var/log/nginx, /var/log/apache2, /var/log/httpd', '웹 요청량, 접속 IP, 웹셸·SQL 인젝션·스캔 등 의심 요청, 큰 다운로드'],
   ['messages, syslog 등', '/var/log', '이름이 달라도 내용을 보고 SSH/audit/DB 로그를 자동 인식'],
 ];
 function uploadView(){
@@ -3492,7 +3819,9 @@ document.addEventListener('mousemove', ev=>{
   const C = CHARTS[c.dataset.c]; if(!C){ TIP.style.display='none'; return; }
   const b = C.bins[+c.dataset.i];
   let body;
-  if(C.mode==='emph'){
+  if(C.kind==='web'){
+    body = `<div class="tr tt"><span>요청</span><b>${b.n.toLocaleString()}건</b></div><div class="tr"><span>의심 요청</span><b>${b.hi.toLocaleString()}</b></div>`;
+  } else if(C.mode==='emph'){
     const sev = SEVS.slice().reverse().filter(x=>b.sev[x]).map(x=>`<div class="tr"><span>${SEV_L[x]}</span><b>${b.sev[x]}</b></div>`).join('');
     const top = Object.entries(b.cats).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,n])=>`${esc(CATS[k])} ${n}`).join(' · ');
     body = `<div class="tr tt"><span>총</span><b>${b.n.toLocaleString()}건</b></div>${sev}${top?`<div class="tc">${top}</div>`:''}`;
@@ -3568,6 +3897,7 @@ function csv(){
 }
 
 /* ── 접속 방향 ── */
+function webOf(ip){ if(!D.web) return null; if(!D._wip){ D._wip={}; D.web.ips.forEach(x=>D._wip[x.ip]=x); } return D._wip[ip]; }
 function inCard(p, max){
   const self = isSelf(p.ip), hot = p.ok && !p.private && !self;
   const cats = Object.entries(p.cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`${catB(c)} <span style="font-size:12px;color:var(--muted)">${n}</span>`).join(' ');
@@ -3580,6 +3910,7 @@ function inCard(p, max){
     ${p.tried.length?`<div class="row">시도 계정 <b class="mono">${p.tried.slice(0,8).map(([u,n])=>esc(u)+(n?`(${n})`:'')).join(', ')}${p.tried.length>8?' …':''}</b></div>`:''}
     <div class="row">최초 <b class="mono">${fmt(p.first)}</b></div><div class="row">최종 <b class="mono">${fmt(p.last)}</b></div>
     ${cats?`<div class="row" style="margin-top:8px">${cats}</div>`:''}
+    ${(w=>w?`<div class="row">웹 요청 <b>${w.n.toLocaleString()}</b>회${w.susp?` · 의심 <b style="color:var(--crit)">${w.susp}</b>`:''}${Object.keys(w.types).length?' · '+Object.keys(w.types).map(t=>esc(WEB_LABEL[t]||t)).join(', '):''} <a data-act="wip" data-v="${esc(p.ip)}">웹 접속 보기</a></div>`:'')(webOf(p.ip))}
     <div class="acts"><button class="iconbtn" data-act="ip" data-v="${esc(p.ip)}">타임라인</button>${p.sessions.length?`<button class="iconbtn" data-act="ipsess" data-v="${esc(p.ip)}">세션 ${p.sessions.length}개</button>`:''}</div></div>`;
 }
 function outCard(a){
@@ -3739,6 +4070,11 @@ const GUIDE = [
     look:['"bytes read" 가 큰 파일 → 외부로 내려받아 간 파일과 크기','/tmp 아래 숨김 폴더의 압축 파일 → 미리 묶어 둔 유출 자료'],
     limit:'SFTP 파일 단위 기록은 sshd_config 에 "Subsystem sftp internal-sftp -l VERBOSE" 가 있어야 남습니다. scp 다운로드는 auditd 로만 보입니다.',
     cmd:"grep 'internal-sftp' /var/log/auth.log | grep -E 'open|close'" },
+  { k:'web', name:'웹 서버 접근 로그', files:'/var/log/nginx/access.log*\n/var/log/apache2/access.log*, /var/log/httpd/access_log*', kind:'웹 접근 로그', prio:1,
+    what:'웹 요청 한 건마다 접속 IP, 시각, 요청 주소, 응답 코드, 응답 크기, User-Agent 가 남습니다. 웹셸·취약점으로 들어온 경우 침입 경로가 여기에만 남습니다.',
+    look:['업로드 폴더 안의 .php 같은 스크립트 요청 → 웹셸 의심 (200 이면 파일이 실제로 있음)','같은 IP 의 404 대량 → 경로 스캔, 로그인 주소 POST 대량 → 무차별 대입','응답 크기가 유난히 큰 백업·DB 파일 요청 → 웹으로 유출','SSH 로 들어온 IP 와 같은 IP 가 웹에도 있는지 (접속 방향 탭 IP 카드)'],
+    limit:'POST 본문(무엇을 보냈는지)은 남지 않습니다. 프록시·로드밸런서 뒤라면 실제 IP 가 X-Forwarded-For 에 있어야 합니다(이 뷰어는 줄 끝의 X-Forwarded-For 를 읽습니다). 보관 기간이 짧은 경우가 많습니다.',
+    cmd:"awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head\ngrep ' 404 ' /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c | sort -rn | head" },
   { k:'etc', name:'계정·설정 파일', files:'/etc/passwd, ~/.ssh/authorized_keys,\ncrontab (/var/spool/cron, /etc/cron*)', kind:null, prio:3,
     what:'로그는 아니지만 공격자가 남긴 백도어가 그대로 있는 곳입니다.',
     look:['/etc/passwd 의 UID 0 계정 (root 말고 0 이 있으면 백도어)','authorized_keys 에 모르는 키','crontab 에 /tmp 나 숨김 폴더의 스크립트',
@@ -3770,6 +4106,121 @@ function guideView(){
   }).join('')}</div>`;
 }
 
+/* ── 웹 접속 (access log) ── */
+const wv = { q:'', status:'all', sus:false, ip:null, type:null, limit:300 };
+const fmtBytes = n => n==null ? '' : n<1024 ? n+' B' : n<1048576 ? (n/1024).toFixed(1)+' KB' : n<1073741824 ? (n/1048576).toFixed(1)+' MB' : (n/1073741824).toFixed(2)+' GB';
+const stCls = c => c>=500 ? 's5' : c>=400 ? 's4' : c>=300 ? 's3' : 's2';
+const inRg = ts => !st.range || (ts!=null && ts>=st.range[0] && ts<st.range[1]);
+function webBins(unit){
+  const W = D.web, size = unit==='hour' ? 3600 : 86400, off = OFF*60, m = new Map();
+  for(const [h, n, sus] of W.hourly){
+    if(!inRg(h)) continue;
+    const k = Math.floor((h+off)/size);
+    const b = m.get(k) || {k, n:0, hi:0}; b.n += n; b.hi += sus; m.set(k, b);
+  }
+  if(!m.size) return [];
+  const ks = [...m.keys()], lo = Math.min(...ks), hi = Math.max(...ks), out = [];
+  for(let k=lo; k<=hi && out.length<1500; k++){
+    const b = m.get(k) || {n:0, hi:0};
+    out.push({start:k*size-off, end:(k+1)*size-off, n:b.n, hi:b.hi, sev:{}, cats:{}, web:true});
+  }
+  return out;
+}
+function webView(){
+  const W = D.web;
+  if(!W) return `<div class="panel empty">웹 서버 접근 로그가 없습니다.<br><span style="font-size:13px">nginx·apache 의 access.log 를 올리면 요청량, 접속 IP, 의심 요청을 볼 수 있습니다.</span></div>`;
+  const reqs = W.reqs.filter(r=>inRg(r.ts));
+  const shells = W.shells.filter(x=>!st.range || (x.last>=st.range[0] && x.first<st.range[1]));
+  const ips = W.ips.filter(x=>!st.range || (x.last>=st.range[0] && x.first<st.range[1]))
+    .sort((a,b)=>Object.keys(b.types).length-Object.keys(a.types).length || (b.ssh?1:0)-(a.ssh?1:0) || b.susp-a.susp || b.n-a.n);
+  const big = W.big.filter(b=>inRg(b.ts));
+  const tot = W.hourly.reduce((a,[h,n])=>a+(inRg(h)?n:0),0), susTot = W.hourly.reduce((a,[h,,x])=>a+(inRg(h)?x:0),0);
+  const s4 = Object.entries(W.status).reduce((a,[k,v])=>a+(+k>=400&&+k<500?v:0),0), s5 = Object.entries(W.status).reduce((a,[k,v])=>a+(+k>=500?v:0),0);
+  // 요청량 그래프
+  const unit = ch.bin==='auto' ? ((W.hourly.length && W.hourly[W.hourly.length-1][0]-W.hourly[0][0] <= 3*86400) ? 'hour' : 'day') : ch.bin;
+  const bins = webBins(unit);
+  const chart = bins.length ? `<section class="panel hist" style="margin-bottom:12px">
+    <div class="hhead"><h2>${unit==='hour'?'시간별':'날짜별'} 요청량</h2>${unitSeg()}</div>
+    <div class="clegend"><span><i class="sw s-hi"></i>의심 요청</span><span><i class="sw s-rest"></i>그 외 요청</span></div>
+    <div class="smrow main"><div class="smlab"></div>${barRow('web-main', bins, unit, 'emph', 110)}</div>
+    <div class="smrow"><div class="smlab"></div>${xAxis(bins, unit)}</div></section>` : '';
+  if(CHARTS['web-main']) CHARTS['web-main'].kind = 'web';
+  const K = [['총 요청', tot.toLocaleString(), st.range?'선택 기간':`파일 ${W.files.length}개`],
+    ['접속 IP', (st.range?ips.length:W.unique_ips).toLocaleString(), ''],
+    ['4xx 오류', s4.toLocaleString(), '없는 주소·차단'],
+    ['5xx 오류', s5.toLocaleString(), '서버 오류'],
+    ['의심 요청', susTot.toLocaleString(), W.reqs_cut?`목록은 앞 ${W.reqs.length.toLocaleString()}건만`:'아래 목록'],
+    ['웹셸 의심 경로', shells.length, shells.length?esc(shells[0].path):'없음']];
+  let h = `<div class="kpis">${K.map(([l,v,sub],i)=>`<div class="kpi" style="--k:var(${i>=4?'--crit':'--c-web'})"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join('')}</div>`;
+  h += chart;
+  // 웹셸 의심 경로
+  if(shells.length) h += `<section class="panel" style="margin-bottom:12px"><h2>웹셸 의심 경로 <small>업로드 폴더의 스크립트나 웹셸에 흔한 이름 · 상태 2xx 가 있으면 실제로 존재하는 파일</small></h2>
+    <div class="tablewrap" style="border:0"><table style="min-width:640px"><thead><tr><th>경로</th><th>요청</th><th>POST</th><th>응답</th><th>요청 IP</th><th>처음 ~ 마지막</th></tr></thead><tbody>
+    ${shells.slice(0,30).map(x=>`<tr><td class="mono" style="word-break:break-all"><a data-act="wpath" data-v="${esc(x.path)}">${esc(x.path)}</a></td><td>${x.n}</td><td>${x.post}</td>
+      <td>${Object.entries(x.status).map(([k,v])=>`<span class="hs ${stCls(+k)}">${k}×${v}</span>`).join(' ')}</td>
+      <td class="mono">${x.ips.map(ip=>`<a data-act="wip" data-v="${esc(ip)}">${esc(ip)}</a>`).join(', ')}</td><td class="mono t">${fmt(x.first).slice(5,16)} ~ ${fmt(x.last).slice(5,16)}</td></tr>`).join('')}
+    </tbody></table></div></section>`;
+  // 의심 요청
+  const types = {}; reqs.forEach(r=>r.ty.forEach(t=>types[t]=(types[t]||0)+1));
+  const rlist = reqs.filter(r=>(!wv.type || r.ty.includes(wv.type)) && (!wv.ip || r.ip===wv.ip));
+  h += `<section class="panel" style="margin-bottom:12px"><h2>의심 요청 <small>${rlist.length.toLocaleString()}건${W.reqs_cut?` · 너무 많아 ${W.reqs_cut.toLocaleString()}건은 목록에서 생략`:''}</small></h2>
+    <div class="chips" style="margin-bottom:8px"><button class="chip ${!wv.type?'on':''}" data-act="wtype" data-v="" style="--c:var(--muted)">전체</button>
+      ${Object.entries(types).sort((a,b)=>b[1]-a[1]).map(([t,n])=>`<button class="chip ${wv.type===t?'on':''}" data-act="wtype" data-v="${t}" style="--c:var(--crit)"><i></i>${esc(WEB_LABEL[t]||t)}<span class="n">${n}</span></button>`).join('')}</div>
+    ${wv.ip?`<div class="toolbar"><span class="pill">IP: <b class="mono">${esc(wv.ip)}</b><button data-act="wipclr">×</button></span></div>`:''}
+    ${rlist.length?`<div class="tablewrap" style="border:0"><table style="min-width:900px"><thead><tr><th>시각</th><th>위험</th><th>IP</th><th>유형</th><th>요청</th><th>상태</th><th>크기</th><th>User-Agent</th></tr></thead><tbody>
+    ${rlist.slice(0,500).map(r=>{ const e = bySrcLine[r.src+':'+r.line]; return `<tr class="ev ${r.sev}" ${e?`data-act="ev" data-v="${e._i}"`:''}>
+      <td class="t">${fmt(r.ts)}</td><td>${sevB(r.sev)}</td><td class="mono"><a data-act="wip" data-v="${esc(r.ip)}">${esc(r.ip)}</a></td>
+      <td>${r.ty.map(t=>`<span class="tag hot">${esc(WEB_LABEL[t]||t)}</span>`).join('')}</td>
+      <td class="m"><code>${esc(r.m)} ${esc(r.u)}</code></td><td><span class="hs ${stCls(r.st)}">${r.st}</span></td><td class="mono">${fmtBytes(r.sz)}</td>
+      <td class="ua">${esc(r.ua)}</td></tr>`; }).join('')}</tbody></table></div>${rlist.length>500?'<div class="empty">앞 500건만 표시했습니다. 유형이나 IP 로 좁혀 보세요.</div>':''}`
+    :'<div class="empty">의심 요청이 없습니다.</div>'}</section>`;
+  // 접속 IP 순위
+  h += `<section class="panel" style="margin-bottom:12px"><h2>접속 IP <small>공격 유형이 잡힌 IP 부터 · ${W.ips_more?`상위 300개만 (나머지 ${W.ips_more}개)`:''}</small></h2>
+    <div class="tablewrap" style="border:0"><table style="min-width:900px"><thead><tr><th>IP</th><th>요청</th><th>4xx</th><th>5xx</th><th>의심</th><th>유형</th><th>전송량</th><th>처음 ~ 마지막</th><th>User-Agent</th></tr></thead><tbody>
+    ${ips.slice(0,150).map(x=>`<tr><td class="mono"><a data-act="wip" data-v="${esc(x.ip)}">${esc(x.ip)}</a> ${x.private?'<span class="badge">내부망</span>':''}${x.ssh?'<span class="badge red" title="같은 IP 가 SSH 로도 접속">SSH 도 접속</span>':''}</td>
+      <td>${x.n.toLocaleString()}</td><td>${x.n4xx||''}</td><td>${x.n5xx||''}</td><td>${x.susp?`<b style="color:var(--crit)">${x.susp}</b>`:''}</td>
+      <td>${Object.keys(x.types).map(t=>`<span class="tag hot">${esc(WEB_LABEL[t]||t)}</span>`).join('')}</td><td class="mono">${fmtBytes(x.bytes)}</td>
+      <td class="mono t">${fmt(x.first).slice(5,16)} ~ ${fmt(x.last).slice(5,16)}</td><td class="ua">${esc((x.ua||[])[0]||'')}</td></tr>`).join('')}
+    </tbody></table></div></section>`;
+  // 큰 응답 · 많이 요청된 경로
+  h += `<div class="grid2" style="margin-bottom:12px"><section class="panel"><h2>큰 응답 <small>많이 내려받아 간 요청 — 백업·덤프 파일이면 유출 의심</small></h2>
+    ${big.length?`<div class="tablewrap" style="border:0"><table style="min-width:520px"><tbody>${big.slice(0,15).map(b=>`<tr><td class="mono">${fmtBytes(b.sz)}</td><td class="m"><code>${esc(b.m)} ${esc(b.u)}</code></td>
+      <td><span class="hs ${stCls(b.st)}">${b.st}</span></td><td class="mono"><a data-act="wip" data-v="${esc(b.ip)}">${esc(b.ip)}</a></td><td class="t">${fmt(b.ts).slice(5,16)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">없음</div>'}</section>
+    <section class="panel"><h2>많이 요청된 경로 <small>전체 기간</small></h2>
+    <div class="tablewrap" style="border:0"><table><tbody>${W.top_paths.map(([pth,n])=>`<tr><td class="m"><code><a data-act="wpath" data-v="${esc(pth)}">${esc(pth)}</a></code></td><td style="text-align:right">${n.toLocaleString()}</td></tr>`).join('')}</tbody></table></div></section></div>`;
+  h += webRowsView();
+  return h;
+}
+/* 전체 요청 원문 */
+function webRowsView(){
+  const R = D.web.rows; if(!R) return '';
+  const q = wv.q.trim().toLowerCase();
+  const out = [];
+  for(const r of R.data){
+    const [ts, ipi, m, u, stc, sz, uai, sus] = r;
+    if(!inRg(ts)) continue;
+    if(wv.sus && !sus) continue;
+    if(wv.ip && R.ips[ipi]!==wv.ip) continue;
+    if(wv.status!=='all' && String(stc)[0]!==wv.status) continue;
+    if(q && !(R.ips[ipi]+' '+m+' '+u+' '+stc+' '+R.uas[uai]).toLowerCase().includes(q)) continue;
+    out.push(r);
+  }
+  const shown = out.slice(0, wv.limit);
+  return `<section class="panel"><h2>전체 요청 <small>${R.mode==='all'?`모든 요청 ${R.total.toLocaleString()}건`:`요청이 많아 의심 IP 의 요청 ${R.kept.toLocaleString()}건만 보관 (전체 ${R.total.toLocaleString()}건)`}</small></h2>
+    <div class="toolbar"><input class="search" id="wq" placeholder="IP, 주소, 상태 코드, User-Agent 검색" value="${esc(wv.q)}">
+      <select id="wst">${[['all','모든 상태'],['2','2xx 성공'],['3','3xx 이동'],['4','4xx 오류'],['5','5xx 서버 오류']].map(([v,l])=>`<option value="${v}" ${wv.status===v?'selected':''}>${l}</option>`).join('')}</select>
+      <label class="tgl"><input type="checkbox" id="wsus" ${wv.sus?'checked':''}>의심 요청만</label>
+      ${wv.ip?`<span class="pill">IP: <b class="mono">${esc(wv.ip)}</b><button data-act="wipclr">×</button></span>`:''}
+      <span class="count">${out.length.toLocaleString()}건</span></div>
+    ${shown.length?`<div class="tablewrap"><table style="min-width:900px"><thead><tr><th>시각</th><th>IP</th><th>요청</th><th>상태</th><th>크기</th><th>User-Agent</th></tr></thead><tbody>
+    ${shown.map(([ts, ipi, m, u, stc, sz, uai, sus])=>`<tr class="${sus?'ev high':''}"><td class="t">${fmt(ts)}</td><td class="mono"><a data-act="wip" data-v="${esc(R.ips[ipi])}">${esc(R.ips[ipi])}</a></td>
+      <td class="m"><code>${esc(m)} ${esc(u)}</code></td><td><span class="hs ${stCls(stc)}">${stc}</span></td><td class="mono">${fmtBytes(sz)}</td><td class="ua">${esc(R.uas[uai])}</td></tr>`).join('')}
+    </tbody></table></div>${out.length>shown.length?`<button class="iconbtn more" data-act="wmore">더 보기 (+500)</button>`:''}`:'<div class="empty">조건에 맞는 요청이 없습니다.</div>'}</section>`;
+}
+const WEB_LABEL = {webshell:'웹셸 의심', rce:'명령 실행 시도', sqli:'SQL 인젝션', lfi:'경로 조작', sensitive:'민감 파일', xss:'XSS',
+  log4shell:'Log4Shell', shellshock:'Shellshock', exfil:'대용량 백업 다운로드', bigdl:'대용량 다운로드', scan:'경로 대량 탐색', scanner:'스캐너 도구',
+  brute:'로그인 무차별 대입', upload:'파일 업로드', admin:'관리 페이지'};
+
 /* ── 소스 ── */
 function sources(){
   return `<div class="tablewrap"><table class="srcs" style="min-width:560px"><thead><tr><th>로그 파일</th><th>종류</th><th style="text-align:right">이벤트</th></tr></thead><tbody>
@@ -3783,7 +4234,7 @@ function sources(){
 function render(){
   refreshView();
   renderNav();
-  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView, files:filesView}[st.view];
+  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView, files:filesView, web:webView}[st.view];
   $('#main').innerHTML = rangeBar() + v();
   for(const id of ['rfrom','rto']){ const el = $('#'+id); if(el) el.onkeydown = ev=>{ if(ev.key==='Enter') document.querySelector('[data-act=rapply]').click(); }; }
   if(st.view==='timeline'){
@@ -3797,6 +4248,12 @@ function render(){
   if(st.view==='ips'){
     const si = $('#srvip');
     if(si) si.onchange = ()=>{ try{ localStorage.setItem('secview-server-ip', si.value.trim()); }catch(_){} SERVER_IPS = si.value.split(/[\s,]+/).filter(Boolean); if(!si.value.trim()) loadServerIps(); render(); };
+  }
+  if(st.view==='web'){
+    const q = $('#wq'); let t;
+    if(q) q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ wv.q=q.value; wv.limit=300; const pos=q.selectionStart; const y=window.scrollY; render(); window.scrollTo(0,y); const n=$('#wq'); n.focus(); n.setSelectionRange(pos,pos); },200); };
+    const sel = $('#wst'); if(sel) sel.onchange = ev=>{ wv.status=ev.target.value; wv.limit=300; const y=window.scrollY; render(); window.scrollTo(0,y); };
+    const sus = $('#wsus'); if(sus) sus.onchange = ev=>{ wv.sus=ev.target.checked; wv.limit=300; const y=window.scrollY; render(); window.scrollTo(0,y); };
   }
   if(st.view==='files'){
     const q = $('#fq'); let t;
@@ -3848,7 +4305,7 @@ document.addEventListener('click', ev=>{
       TIP.style.display = 'none';
       const f = {range:[b.start, b.end], rangeLabel:lab, limit:300};
       if(t.dataset.c.startsWith('sm-')) Object.assign(f, {cats:new Set([C.mode]), minSev:0});
-      if(st.view==='timeline'){ Object.assign(st, f); render(); }
+      if(st.view==='timeline' || C.kind==='web'){ Object.assign(st, f); render(); }
       else go('timeline', Object.assign(f, {ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', q:'', ...(t.dataset.c.startsWith('sm-')?{}:{cats:new Set(Object.keys(CATS)), minSev:0})}));
       break;
     }
@@ -3864,6 +4321,11 @@ document.addEventListener('click', ev=>{
     case 'destcard': go('ips'); setTimeout(()=>{ const el=document.getElementById('dest-'+v); if(el){ el.scrollIntoView({block:'center'}); el.style.outline='2px solid var(--accent)'; } },0); break;
     case 'file': fv.focus=v; fv.q=''; fv.only=false; go('files'); break;
     case 'fpath': go('timeline',{fpath:v,ip:null,sid:null,user:null,dest:null,scope:'all',cats:new Set(Object.keys(CATS)),minSev:0,q:''}); break;
+    case 'wip': wv.ip=v; wv.limit=300; if(st.view!=='web') go('web'); else { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
+    case 'wipclr': wv.ip=null; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
+    case 'wtype': wv.type=v||null; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
+    case 'wpath': wv.q=v; wv.limit=300; { render(); const el=$('#wq'); if(el) el.scrollIntoView({block:'center'}); } break;
+    case 'wmore': wv.limit+=500; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
     case 'hfile': hv.file=+v; hv.q=''; render(); window.scrollTo(0,0); break;
     case 'hline': { const e = E[+v]; if(e) openEvent(+v); break; }
     case 'guidego': go(v); break;
