@@ -20,6 +20,7 @@ Python 3.8+ 표준 라이브러리만 사용하므로 서버에 이 파일 하�
   파일전송   SFTP(internal-sftp, LogLevel VERBOSE), vsftpd/xferlog, scp/curl/wget/rsync 명령
 """
 import argparse
+import base64
 import datetime as dt
 import fnmatch
 import glob
@@ -1101,6 +1102,21 @@ def event_note(e):
     return None
 
 
+def key_note(e):
+    km = e.get('key_match')
+    if km:
+        t = (f'로그인에 쓴 키의 지문({km["fp"]})이 {km["path"]} {km["line"]}번째 줄의 키'
+             + (f'("{km["comment"]}")' if km['comment'] else '') + '와 정확히 같습니다(확정).')
+        ka = e.get('key_added')
+        if ka:
+            t += ' 이 키는 ' + (f'세션 {ka["sid"]}' + (f'(⬇ {ka["ip"]})' if ka.get('ip') else '') + '에서 ' if ka.get('sid') else '')
+            t += '키 값이 그대로 들어간 명령으로 등록됐습니다 — 공격자가 직접 심은 키로 다시 들어온 것입니다.'
+        return t
+    if e.get('key_missing'):
+        return '로그인에 쓴 키가 지금 authorized_keys 에 없습니다. 접속 후 키를 지웠거나, 다른 계정의 키 파일로 들어왔을 수 있습니다.'
+    return None
+
+
 def annotate(e):
     if e.get('cmd') and e.get('via'):
         if 'DB 히스토리' in (e.get('tags') or []):
@@ -1117,6 +1133,9 @@ def annotate(e):
             if x['summary'] or x['details']:
                 e['explain'] = x
     note = event_note(e)
+    kn = key_note(e)
+    if kn:
+        note = kn + (' ' + note if note else '')
     if note:
         e['note'] = note
 
@@ -1356,6 +1375,24 @@ def _sec_days(v):
     return int(m[1]) * mult
 
 
+# ───────────────────────── SSH 공개키 지문 ─────────────────────────
+PUBKEY_RX = re.compile(r'(?:^|\s)((?:ssh-|ecdsa-|sk-)[\w@.\-]+)\s+([A-Za-z0-9+/]{40,}={0,2})(?:\s+(.*))?$')
+
+
+def pubkey_info(line):
+    """authorized_keys / known_hosts 한 줄 → 키 종류, SHA256 지문(sshd 로그와 같은 형식), MD5 지문, 주석"""
+    m = PUBKEY_RX.search(line.strip())
+    if not m:
+        return None
+    try:
+        raw = base64.b64decode(m[2])
+    except (ValueError, base64.binascii.Error):
+        return None
+    return {'type': m[1], 'fp': 'SHA256:' + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip('='),
+            'md5': ':'.join(f'{b:02x}' for b in hashlib.md5(raw).digest()), 'comment': (m[3] or '').strip(),
+            'options': line.strip()[:m.start()].strip(), 'blob': m[2]}
+
+
 # ───────────────────────── 분석기 ─────────────────────────
 class Analyzer:
     def __init__(self, root, tz, year=None, audit_all=False, use_journal=True, since=None, server_ips=(), until=None):
@@ -1377,6 +1414,7 @@ class Analyzer:
         self.known_hosts = []
         self.web = None
         self.retention = None
+        self.akeys = []
         self.server_ips = {x.strip() for x in server_ips if x and x.strip()}
         self.server_ips_auto = set()
         self.has_auth = False
@@ -1459,6 +1497,7 @@ class Analyzer:
         self.scan_ftp()
         self.scan_known_hosts()
         self.scan_retention()
+        self.scan_authorized_keys()
         self.scan_web()
         if self.since:
             self.events = [e for e in self.events if e['ts'] is None or e['ts'] >= self.since]
@@ -2465,6 +2504,30 @@ class Analyzer:
                 if f['level'] in ('crit', 'warn', 'good'):
                     self.notes.append('[보관 설정] ' + f['text'])
 
+    def scan_authorized_keys(self):
+        for p in self.paths('root/.ssh/authorized_keys*', 'home/*/.ssh/authorized_keys*'):
+            rp = self.rel(p)
+            parts = rp.strip('/').split('/')
+            user = 'root' if parts[0] == 'root' else parts[1]
+            f = self.safe_open(p)
+            if not f:
+                continue
+            keys = []
+            with f:
+                for n, line in enumerate(f, 1):
+                    if not line.strip() or line.lstrip().startswith('#'):
+                        continue
+                    k = pubkey_info(line)
+                    if k:
+                        k['line'] = n
+                        keys.append(k)
+            try:
+                mtime = os.path.getmtime(p)
+            except OSError:
+                mtime = None
+            self.akeys.append({'path': rp, 'user': user, 'keys': keys, 'mtime': mtime})
+            self.sources.append({'path': rp, 'kind': 'authorized_keys', 'events': 0})
+
     def scan_known_hosts(self):
         for p in self.paths('root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*'):
             rp = self.rel(p)
@@ -2567,7 +2630,9 @@ class Analyzer:
             if e.get('kind') == 'audit_login' and e.get('pid'):
                 for (_, pid), s in by_pid.items():
                     if pid == e['pid'] and s['ip'] == e.get('ip'):
+                        e['sid_by'] = 'pid'
                         return s
+            e['sid_by'] = 'ip-time'
             near = [s for s in sessions.values() if s['ip'] == e.get('ip') and abs(s['start'] - e['ts']) <= window]
             near.sort(key=lambda s: (s['user'] != e.get('user'), abs(s['start'] - e['ts'])))
             return near[0] if near else None
@@ -2599,13 +2664,13 @@ class Analyzer:
                 if e.get('detail'):
                     e.setdefault('tags', []).append('키: ' + e['detail'])
                 s = new_session(e, e.get('method'), 'auth')
-                e['sid'] = s['id']
+                e['sid'], e['sid_by'] = s['id'], 'login'
                 if e.get('pid'):
                     by_pid[(e.get('host'), e['pid'])] = s
             elif k in ('sess_open', 'sess_close', 'disconnect', 'sftp_req') and e.get('pid'):
                 s = by_pid.get((e.get('host'), e['pid']))
                 if s:
-                    e['sid'] = s['id']
+                    e['sid'], e['sid_by'] = s['id'], 'sshd-pid'
                     e.setdefault('ip', s['ip'])
                     if k in ('sess_close', 'disconnect') and s['end'] is None:
                         s['end'] = ts
@@ -2615,6 +2680,7 @@ class Analyzer:
                 s = match_session(e)
                 if s is None:
                     s = new_session(e, None, 'audit' if k == 'audit_login' else 'wtmp')
+                    e['sid_by'] = 'login'
                 elif ('audit' if k == 'audit_login' else 'wtmp') not in s['sources']:
                     s['sources'].append('audit' if k == 'audit_login' else 'wtmp')
                 e['sid'] = s['id']
@@ -2645,18 +2711,18 @@ class Analyzer:
         for e in ev:
             if e['ts'] is None or e.get('sid'):
                 continue
-            s, inferred = None, False
+            s, inferred, how = None, False, None
             if e.get('ses') and e['ses'] in ses_map:
-                s = ses_map[e['ses']]
+                s, how = ses_map[e['ses']], 'audit-ses'
             elif e.get('via') or e.get('kind') in ('sftp_xfer', 'sftp_op', 'su', 'sudo_fail'):
                 cand = active(e['ts'], e.get('user'), e.get('ip'))
-                s = cand[-1] if cand else None
+                s, how = (cand[-1] if cand else None), 'time'
             elif e.get('kind') in ('acct',) or (e['cat'] == 'db' and not e.get('ip')):
                 cand = [x for x in active(e['ts']) if x['ip'] and not is_private(x['ip'])]
                 if len(cand) == 1:
-                    s, inferred = cand[0], True
+                    s, inferred, how = cand[0], True, 'inferred'
             if s:
-                e['sid'] = s['id']
+                e['sid'], e['sid_by'] = s['id'], how
                 if e.get('via') == 'audit' and s['user'] and e.get('user') != s['user']:
                     e.setdefault('tags', []).append(f'audit 계정={e["user"]}')
                     e['user'] = s['user']
@@ -2786,6 +2852,32 @@ class Analyzer:
             for d in e.get('dest', []):
                 d['kind'] = host_kind(d['host'], self_ips)
 
+        # SSH 키 로그인 ↔ authorized_keys: 지문(SHA256)이 정확히 같아야 연결
+        fp_index = {}
+        for ak in self.akeys:
+            for k in ak['keys']:
+                fp_index.setdefault(k['fp'], []).append((ak, k))
+                fp_index.setdefault(k['md5'], []).append((ak, k))
+        for e in ev:
+            if e.get('kind') != 'login_ok' or e.get('method') != 'publickey' or not e.get('detail'):
+                continue
+            m = re.search(r'(SHA256:[A-Za-z0-9+/]+)|((?:[0-9a-f]{2}:){15}[0-9a-f]{2})', e['detail'])
+            if not m:
+                continue
+            fp = m.group(1) or m.group(2)
+            hits = fp_index.get(fp)
+            if hits:
+                ak, k = hits[0]
+                e['key_match'] = {'fp': fp, 'path': ak['path'], 'user': ak['user'], 'comment': k['comment'], 'type': k['type'],
+                                  'line': k['line'], 'options': k['options']}
+                e.setdefault('tags', []).append(f'키 일치: {k["comment"] or k["type"]}')
+                adder = next((a for a in ev if a.get('cmd') and k['blob'][:60] in a['cmd']), None)   # 키 값이 그대로 들어간 명령
+                if adder:
+                    e['key_added'] = adder
+            elif any(ak['user'] == e.get('user') for ak in self.akeys):
+                e['key_missing'] = True
+                e.setdefault('tags', []).append('지금 authorized_keys 에 없는 키')
+
         out_events, index = [], {}
         for e in ev:
             if not e.get('hidden'):
@@ -2796,6 +2888,10 @@ class Analyzer:
             e = {k: v for k, v in e.items() if k not in ('seq', 'argv0', 'hidden', 'dup', 'users')}
             if o:
                 e['origin'] = {'i': index.get(id(o)), 'sid': o.get('sid'), 'ip': o.get('ip'), 'cmd': o.get('cmd')}
+            ka = e.get('key_added')
+            if ka:
+                e['key_added'] = {'i': index.get(id(ka)), 'ts': ka['ts'], 'sid': ka.get('sid'), 'ip': ka.get('ip'), 'cmd': ka.get('cmd'),
+                                  'user': ka.get('user'), 'src': ka.get('src')}
             if w:
                 ago = int(e['ts'] - w['ts'])
                 e['web_origin'] = {'i': index.get(id(w)), 'ip': w.get('ip'), 'cmd': w.get('cmd'),
@@ -2903,6 +2999,7 @@ class Analyzer:
             'web': self.web,
             'known_hosts': self.known_hosts,
             'retention': self.retention,
+            'authorized_keys': [{**ak, 'keys': [{k2: v for k2, v in k.items() if k2 != 'blob'} for k in ak['keys']]} for ak in self.akeys],
         }
 
 
@@ -3118,7 +3215,7 @@ def empty_data(tz):
 # 브라우저에서 올린 파일(개별 파일, 폴더, zip/tar.gz)을 임시 디렉터리에 / 구조로 배치한 뒤 Analyzer 로 분석한다.
 SCAN_GLOBS = ['etc/logrotate.conf', 'etc/logrotate.d/*', 'etc/systemd/journald.conf', 'etc/systemd/journald.conf.d/*',
               'etc/audit/auditd.conf', 'etc/rsyslog.conf', 'etc/rsyslog.d/*', 'var/log/nginx/*access*', 'var/log/apache2/*access*', 'var/log/httpd/*access*', 'var/log/apache/*access*',
-              'var/log/lighttpd/*access*', 'var/log/www/*access*', 'root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*', 'var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
+              'var/log/lighttpd/*access*', 'var/log/www/*access*', 'root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*', 'root/.ssh/authorized_keys*', 'home/*/.ssh/authorized_keys*', 'var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
               'root/.*_history', 'root/.history', 'home/*/.*_history', 'home/*/.history', 'var/lib/*/.*_history',
               'srv/*/.*_history', 'var/log/mysql/*.log*', 'var/log/mysql*.log*', 'var/log/mariadb/*.log*',
               'var/lib/mysql/*.log', 'var/log/postgresql/*.log*', 'var/lib/pgsql/*.log', 'var/lib/postgresql/*.log',
@@ -3193,7 +3290,7 @@ def place_target(name, path, n):
             user = None
         return f'home/{user}/.{m[1]}_history' if user else f'root/.{m[1]}_history'
     for rx, d in ((r'^(?:auth\.log|secure)', 'var/log/'), (r'^audit\.log', 'var/log/audit/'), (r'^[wb]tmp', 'var/log/'),
-                  (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/'), (r'^known_hosts', 'root/.ssh/'),
+                  (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/'), (r'^known_hosts', 'root/.ssh/'), (r'^authorized_keys', 'root/.ssh/'),
                   (r'^logrotate\.conf$', 'etc/'), (r'^journald\.conf$', 'etc/systemd/'), (r'^auditd\.conf$', 'etc/audit/'), (r'^rsyslog\.conf$', 'etc/'),
                   (r'^(?:access[._-]?log|access_log|.*[._-]access[._-]?log)', 'var/log/nginx/')):
         if re.match(rx, bl):
@@ -3775,6 +3872,34 @@ h2.sect small{margin:0}
 .hs.s4{color:var(--high);border-color:color-mix(in srgb,var(--high) 40%,transparent)}
 .hs.s5{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
 td.ua{font-size:11.5px;color:var(--faint);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 연결 근거 */
+.lk{display:inline-block;font-size:11px;font-weight:600;padding:0 6px;border-radius:4px;border:1px solid var(--line);white-space:nowrap}
+.lk.fix{color:var(--c-recon);border-color:color-mix(in srgb,var(--c-recon) 45%,transparent)}
+.lk.guess{color:var(--muted);border-style:dashed}
+.origin.fix{color:var(--c-recon)}
+/* 나란히 보기 */
+.cv-wrap{position:relative;user-select:none}
+.cv-axis{position:relative;height:18px;margin-left:220px;font-size:11px;color:var(--faint);white-space:nowrap}
+.cv-axis span{position:absolute;transform:translateX(-50%)}
+.cv-lane{display:grid;grid-template-columns:210px minmax(0,1fr);gap:10px;align-items:center;margin-bottom:6px}
+.cv-lab{display:flex;align-items:center;gap:6px;min-width:0}
+.cv-pick{flex:1;min-width:0;font-size:12.5px;padding:4px 6px}
+.cv-n{font-size:11.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.cv-x{border:0;background:none;color:var(--faint);cursor:pointer;font-size:15px;padding:0 2px}
+.cv-track{position:relative;height:46px;background:var(--panel2);border:1px solid var(--line2);border-radius:6px;cursor:crosshair;overflow:hidden}
+.cv-b{position:absolute;bottom:0;opacity:.55;border-radius:2px 2px 0 0;cursor:pointer}
+.cv-b:hover{opacity:.9}
+.cv-d{position:absolute;top:4px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;border:2px solid var(--panel);cursor:pointer;z-index:2}
+.cv-d.crit{background:var(--crit)}
+.cv-d.high{background:var(--high)}
+.cv-d.on{box-shadow:0 0 0 3px var(--accent)}
+.cv-band{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--accent) 16%,transparent);pointer-events:none;z-index:1}
+.cv-line{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--accent);pointer-events:none;z-index:1}
+.cv-sel{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--accent) 25%,transparent);border:1px dashed var(--accent);pointer-events:none;z-index:3}
+.cv-base{padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
+.cv-base code{white-space:pre-wrap;word-break:break-all}
+.cv-fixed{margin:6px 0 0;padding-left:18px;display:grid;gap:3px}
+@media (max-width:640px){.cv-lane{grid-template-columns:1fr}.cv-axis{margin-left:0}}
 /* 보관 설정 */
 .rfind{display:grid;gap:6px;margin:4px 0 12px;font-size:13px}
 .badge.warn{color:var(--high);border-color:color-mix(in srgb,var(--high) 45%,transparent);background:var(--high-bg)}
@@ -3934,7 +4059,19 @@ function ipCell(e){
   return h;
 }
 const whoTxt = e => [e.user ? esc(e.user) : '', (e.dest||[]).map(d=>'⬆ '+esc(d.host)).join(' '), e.ip ? (e.dir==='in'?'⬇ ':'세션 ⬇ ')+esc(e.ip) : ''].filter(Boolean).join(' · ');
+const SID_BY = {login:['로그인 기록 자체','fix'], 'sshd-pid':['sshd PID 일치','fix'], 'audit-ses':['audit 세션 번호(ses) 일치','fix'],
+  pid:['audit 로그인 PID = sshd PID','fix'], 'ip-time':['같은 IP·근접 시각','guess'], time:['같은 계정, 세션이 열려 있던 시간대','guess'],
+  inferred:['그 시각 유일하게 열려 있던 외부 세션','guess']};
+const sidByB = e => { const b = SID_BY[e.sid_by]; return b ? `<span class="lk ${b[1]}" title="${b[1]==='fix'?'값이 정확히 같아 확정된 연결':'시간·계정으로 추정한 연결'}">${b[1]==='fix'?'확정':'추정'} · ${esc(b[0])}</span>` : ''; };
+function keyH(e){
+  let h = '';
+  if(e.key_match) h += `<div class="origin fix">🔑 키 지문 일치(확정): <span class="mono">${esc(e.key_match.path)}</span> ${e.key_match.line}번째 줄${e.key_match.comment?` "${esc(e.key_match.comment)}"`:''}</div>`;
+  if(e.key_added) h += `<div class="origin fix" data-act="ev" data-v="${e.key_added.i}">↪ 이 키를 등록한 명령(키 값 일치): ${e.key_added.sid?`세션 ${esc(e.key_added.sid)} `:''}${e.key_added.ip?`(⬇ ${esc(e.key_added.ip)}) `:''}${fmt(e.key_added.ts).slice(5)}</div>`;
+  if(e.key_missing) h += `<div class="origin warn">🔑 이 키는 지금 authorized_keys 에 없습니다 (지웠거나 다른 키 파일)</div>`;
+  return h;
+}
 function originH(e){
+  if(e.key_match || e.key_added || e.key_missing) return keyH(e) + (e.origin ? originH({origin:e.origin}) : '');
   if(e.origin) return `<div class="origin" data-act="ev" data-v="${e.origin.i}">↪ 실제 출발: 세션 ${esc(e.origin.sid||'?')}${e.origin.ip?` (⬇ ${esc(e.origin.ip)})`:''} 에서 <code>${esc(e.origin.cmd||'')}</code> 실행</div>`;
   if(e.self_origin || (e.kind==='login_ok' && isSelf(e.ip))) return `<div class="origin warn">↪ 서버 안에서 출발한 접속 — 출발지 IP 는 공격자 위치가 아닙니다. 같은 시각의 다른 세션·웹셸·cron 을 확인하세요</div>`;
   return '';
@@ -3984,6 +4121,7 @@ if(!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme:
 function renderNav(){
   const VIEWS = [['overview','개요'],['timeline','타임라인',ER.length],['ips','접속 방향',V.ips.length+(V.outbound||[]).length],['sessions','세션',V.sessions.length],['files','파일 추적',(V.files||[]).length],
     ...(D.web ? [['web','웹 접속',D.web.total]] : []),
+    ['compare','나란히 보기'],
     ['history','히스토리',HIST.length],['sources','로그 소스',M.sources.length],['guide','로그 가이드'],['upload','⤒ 로그 불러오기']];
   $('#nav').innerHTML = VIEWS.map(([k,l,n])=>`<button data-act="view" data-v="${k}" class="${st.view===k?'on':''}">${l}${n!=null?`<span class="n">${n.toLocaleString()}</span>`:''}</button>`).join('');
 }
@@ -4449,6 +4587,7 @@ function detailH(e){
     e.ses?['audit 세션', `<span class="mono">ses=${esc(e.ses)}</span>`]:null,
     e.path?['파일', `<span class="mono">${esc(e.path)}</span>`]:null,
     e.count?['횟수', `${e.count}회${e.until?` (마지막 ${fmt(e.until)})`:''}`]:null,
+    e.sid?['세션 연결 근거', sidByB(e)]:null,
     e.ip_inferred?['참고', '이 IP 는 로그에 직접 기록된 값이 아니라, 같은 시간대에 열려 있던 유일한 외부 SSH 세션으로 추정한 값입니다.']:null,
   ].filter(Boolean);
   return `<dl class="kv">${kv.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>${e.raw?`<div style="margin-top:10px"><pre class="raw">${esc(e.raw)}</pre></div>`:''}`;
@@ -4697,6 +4836,115 @@ function guideLogsView(){
   }).join('')}</div>`;
 }
 
+/* ── 나란히 보기: 여러 로그를 같은 시간축에 ── */
+const cv = { lanes:null, win:60, sel:null, drag:null, full:false };
+/* 비교 구간: 기간 필터 > (기본) 위험도 높음 이상 이벤트가 있는 구간 ±30분 > 전체 */
+function cvSpan(){
+  const r = M.range || [0, 1];
+  if(st.range) return {a:st.range[0], b:st.range[1], mode:'range'};
+  if(!cv.full){
+    let lo = Infinity, hi = -Infinity;
+    for(const e of ER){ if(e.ts!=null && sr(e.sev)>=3){ if(e.ts<lo) lo=e.ts; if(e.ts>hi) hi=e.ts; } }
+    if(lo !== Infinity && (hi - lo) < (r[1] - r[0]) * 0.8) return {a:Math.max(r[0], lo-1800), b:Math.min(r[1]+1, hi+1800), mode:'focus'};
+  }
+  return {a:r[0], b:r[1]+1, mode:'full'};
+}
+const CV_N = 160;
+function laneOptions(){
+  const o = [];
+  const has = f => E.some(f);
+  const add = (k, label, f, color) => { if(has(f)) o.push({k, label, f, color}); };
+  add('web', '웹 요청 (의심)', e=>e.cat==='web', 'var(--c-web)');
+  add('auth', 'SSH·계정 (로그인)', e=>e.cat==='auth' && e.kind!=='invalid', 'var(--c-auth)');
+  add('cmd', '실행한 명령', e=>!!e.via && !(e.tags||[]).includes('DB 히스토리'), 'var(--c-cmd)');
+  add('db', 'DB 접근·덤프', e=>e.cat==='db', 'var(--c-db)');
+  add('file', '파일 작업', e=>!!e.files, 'var(--c-fileop)');
+  add('out', '⬆ 나간 접속', e=>e.dir==='out', 'var(--c-lateral)');
+  add('persist', '지속성·흔적 삭제', e=>e.cat==='persist'||e.cat==='antiforensic', 'var(--c-persist)');
+  add('transfer', '파일 전송', e=>e.cat==='transfer', 'var(--c-transfer)');
+  V.ips.slice(0,10).forEach(p=>add('ip:'+p.ip, '⬇ IP '+p.ip, e=>e.ip===p.ip, 'var(--c-auth)'));
+  V.sessions.slice().sort((a,b)=>sr(b.max_sev)-sr(a.max_sev)).slice(0,10).forEach(x=>add('sid:'+x.id, `세션 ${x.id} ${x.user||'?'}@${x.ip||'local'}`, e=>e.sid===x.id, 'var(--c-session)'));
+  return o;
+}
+function compareView(){
+  const opts = laneOptions(), byK = {}; opts.forEach(x=>byK[x.k]=x);
+  if(!opts.length) return '<div class="panel empty">비교할 이벤트가 없습니다.</div>';
+  if(!cv.lanes) cv.lanes = ['web','auth','cmd','file','db'].filter(k=>byK[k]).slice(0,4);
+  cv.lanes = cv.lanes.filter(k=>byK[k]);
+  if(!cv.lanes.length) cv.lanes = [opts[0].k];
+  const {a, b, mode} = cvSpan();
+  const span = Math.max(b - a, 60);
+  const X = t => Math.max(0, Math.min(100, (t - a) / span * 100));
+  const lanes = cv.lanes.map(k=>{ const L = byK[k]; const evs = ER.filter(e=>e.ts!=null && e.ts>=a && e.ts<b && L.f(e)); return {L, evs}; });
+  // 시간축 눈금
+  const ticks = []; for(let i=0;i<=6;i++){ const t = a + span*i/6; ticks.push(`<span style="left:${i/6*100}%;${i===0?'transform:none':i===6?'transform:translateX(-100%)':''}">${span<=2*86400?fmt(t).slice(5,16):fmt(t).slice(0,10)}</span>`); }
+  const selBand = cv.sel ? `<div class="cv-band" style="left:${X(cv.sel.t-cv.win)}%;width:${Math.max(0.3, X(cv.sel.t+cv.win)-X(cv.sel.t-cv.win))}%"></div><div class="cv-line" style="left:${X(cv.sel.t)}%"></div>` : '';
+  const laneH = lanes.map(({L, evs}, li)=>{
+    const buckets = new Array(CV_N).fill(0);
+    evs.forEach(e=>{ buckets[Math.min(CV_N-1, Math.floor((e.ts-a)/span*CV_N))]++; });
+    const mx = Math.max(1, ...buckets);
+    const bars = buckets.map((n,i)=> n ? `<i class="cv-b" data-act="cvbin" data-v="${li}:${i}" style="left:${i/CV_N*100}%;width:${100/CV_N}%;height:${Math.max(12, n/mx*100)}%;background:${L.color}" title="${n}건"></i>` : '').join('');
+    const hot = evs.filter(e=>sr(e.sev)>=3).slice(0,400).map(e=>`<b class="cv-d ${e.sev}${cv.sel&&cv.sel.i===e._i?' on':''}" data-act="cvsel" data-v="${e._i}" style="left:${X(e.ts)}%" title="${esc(fmt(e.ts).slice(5)+' '+e.msg)}"></b>`).join('');
+    const sel = cv.lanes.map((k,i)=>`<option value="${esc(k)}" ${k===L.k?'selected':''}>${esc(byK[k].label)}</option>`);
+    return `<div class="cv-lane">
+      <div class="cv-lab"><select class="cv-pick" data-li="${li}" aria-label="${li+1}번째 줄 내용">${opts.map(x=>`<option value="${esc(x.k)}" ${x.k===L.k?'selected':''}>${esc(x.label)}</option>`).join('')}</select>
+        <span class="cv-n">${evs.length.toLocaleString()}건</span>${cv.lanes.length>1?`<button class="cv-x" data-act="cvdel" data-v="${li}" aria-label="이 줄 빼기">×</button>`:''}</div>
+      <div class="cv-track" data-li="${li}">${bars}${hot}${selBand}</div></div>`;
+  }).join('');
+  return `<section class="panel" style="margin-bottom:12px">
+    <h2>나란히 보기 <small>여러 로그를 같은 시간축에 놓고 비교합니다 · <b>같은 시간대에 있다고 서로 연결됐다는 뜻은 아닙니다</b></small></h2>
+    <div class="toolbar" style="margin:6px 0 10px">
+      ${cv.lanes.length<5?`<button class="iconbtn" data-act="cvadd">＋ 줄 추가</button>`:''}
+      <label class="tgl">비교 범위 <select id="cvwin">${[[10,'±10초'],[60,'±1분'],[300,'±5분'],[1800,'±30분'],[3600,'±1시간']].map(([v,l])=>`<option value="${v}" ${cv.win===v?'selected':''}>${l}</option>`).join('')}</select></label>
+      ${mode==='range'?`<button class="iconbtn" data-act="clrrange">확대 해제</button>`:mode==='focus'?`<span class="hint">위험 이벤트가 있는 구간(앞뒤 30분)으로 맞췄습니다</span><button class="iconbtn" data-act="cvfull">전체 기간 보기</button>`:''}
+      <span class="hint" style="margin-left:auto">막대·점을 누르면 그 시각 전후를 다른 줄에서 찾습니다 · 시간축을 좌우로 끌면 그 구간만 확대</span></div>
+    <div class="cv-wrap"><div class="cv-axis">${ticks.join('')}</div>${laneH}</div>
+    <div class="clegend" style="margin-top:8px"><span><i class="sw" style="background:var(--muted)"></i>막대 = 그 구간의 이벤트 수(줄마다 자기 최댓값 기준)</span><span><b class="cv-d crit" style="position:static;display:inline-block"></b> 치명 · <b class="cv-d high" style="position:static;display:inline-block"></b> 높음 위험도 이벤트</span></div>
+  </section>${cv.sel ? compareResult(lanes) : `<div class="panel empty">위 줄에서 막대나 점을 눌러 기준 시각을 고르세요.</div>`}`;
+}
+function compareResult(lanes){
+  const t = cv.sel.t, w = cv.win, base = cv.sel.i!=null ? E[cv.sel.i] : null;
+  const rel = ts => { const d = Math.round(ts - t); return d===0 ? '같은 초' : (d>0?'+':'−') + (Math.abs(d)>=60 ? `${Math.floor(Math.abs(d)/60)}분 ${Math.abs(d)%60}초` : `${Math.abs(d)}초`); };
+  let fixed = '';
+  if(base){
+    const items = [];
+    if(base.sid){ const same = (bySid[base.sid]||[]).length; const b = SID_BY[base.sid_by]; items.push(`<li><a data-act="sess" data-v="${base.sid}">세션 ${esc(base.sid)}</a>의 이벤트 ${same}건 — 근거: ${b?esc(b[0]):'?'} ${b?`<span class="lk ${b[1]}">${b[1]==='fix'?'확정':'추정'}</span>`:''}</li>`); }
+    if(base.key_match) items.push(`<li>🔑 키 지문 일치 <span class="lk fix">확정</span>: ${esc(base.key_match.path)} "${esc(base.key_match.comment||base.key_match.type)}"</li>`);
+    if(base.key_added) items.push(`<li data-act="ev" data-v="${base.key_added.i}" style="cursor:pointer">↪ 이 키를 등록한 명령 <span class="lk fix">확정(키 값 일치)</span>: ${fmt(base.key_added.ts).slice(5)} ${base.key_added.sid?'세션 '+esc(base.key_added.sid):''}</li>`);
+    if(base.origin) items.push(`<li data-act="ev" data-v="${base.origin.i}" style="cursor:pointer">↪ 직전에 이 서버로 ssh 를 실행한 세션 ${esc(base.origin.sid||'?')} <span class="lk guess">추정(명령·시각)</span></li>`);
+    fixed = `<div class="cv-base"><b>기준 이벤트</b> ${fmt(base.ts)} · ${catB(base.cat)} ${esc(base.msg)}${base.cmd?` <code>${esc(base.cmd)}</code>`:''}
+      ${items.length?`<ul class="cv-fixed">${items.join('')}</ul>`:'<div class="hint">값으로 확정되는 연결은 없습니다.</div>'}</div>`;
+  }
+  const groups = lanes.map(({L, evs})=>{
+    const near = evs.filter(e=>Math.abs(e.ts - t) <= w && (!base || e._i !== base._i)).sort((x,y)=>x.ts-y.ts);
+    return `<div class="cv-g"><h3 class="rh" style="margin:10px 0 4px"><i class="sw" style="background:${L.color}"></i>${esc(L.label)} <small class="hint">${near.length}건</small></h3>
+      ${near.length ? near.slice(0,60).map(e=>`<div class="sline" data-act="ev" data-v="${e._i}"><span class="t">${rel(e.ts)}</span><span class="c">${catB(e.cat)}</span>
+        <span><span class="mm" style="color:var(--${e.sev==='info'?'muted':e.sev})">${esc(e.msg)}</span>${e.cmd?`<code>${esc(e.cmd)}</code>`:''}<span class="hint" style="font-size:11.5px"> ${esc([e.user, e.ip].filter(Boolean).join(' · '))}${e.sid?' · '+esc(e.sid):''}</span></span></div>`).join('') + (near.length>60?`<div class="hint">외 ${near.length-60}건</div>`:'')
+        : '<div class="hint">이 범위 안에는 없습니다.</div>'}</div>`;
+  }).join('');
+  return `<section class="panel"><h2>${fmt(t)} 전후 ±${w>=60?w/60+'분':w+'초'} <small>같은 시간대에 일어난 일 — 연결 근거는 아님 (확정 연결은 기준 이벤트 아래 표시)</small></h2>${fixed}${groups}</section>`;
+}
+/* 시간축 끌어서 확대 */
+document.addEventListener('mousedown', ev=>{
+  const tr = ev.target.closest && ev.target.closest('.cv-track'); if(!tr || ev.button!==0) return;
+  const box = tr.getBoundingClientRect(); cv.drag = {x0: ev.clientX, box, moved:false};
+  const ov = document.createElement('div'); ov.className='cv-sel'; ov.style.left=(ev.clientX-box.left)+'px'; ov.style.width='0px'; tr.appendChild(ov); cv.drag.ov = ov;
+});
+document.addEventListener('mousemove', ev=>{
+  const d = cv.drag; if(!d) return;
+  if(Math.abs(ev.clientX - d.x0) > 5) d.moved = true;
+  const x1 = Math.min(d.x0, ev.clientX) - d.box.left, x2 = Math.max(d.x0, ev.clientX) - d.box.left;
+  d.ov.style.left = Math.max(0,x1)+'px'; d.ov.style.width = Math.min(d.box.width, x2) - Math.max(0,x1) + 'px';
+});
+document.addEventListener('mouseup', ev=>{
+  const d = cv.drag; if(!d) return; cv.drag = null; d.ov.remove();
+  if(!d.moved) return;
+  cv.dragged = true; setTimeout(()=>{ cv.dragged=false; }, 50);
+  const {a, b} = cvSpan(); const span = Math.max(b-a, 60);
+  const f1 = Math.max(0, Math.min(1, (Math.min(d.x0, ev.clientX) - d.box.left) / d.box.width)), f2 = Math.max(0, Math.min(1, (Math.max(d.x0, ev.clientX) - d.box.left) / d.box.width));
+  applyRange(Math.floor(a + span*f1), Math.ceil(a + span*f2) + 1);
+});
+
 /* ── 웹 접속 (access log) ── */
 const wv = { q:'', status:'all', sus:false, ip:null, type:null, limit:300 };
 const fmtBytes = n => n==null ? '' : n<1024 ? n+' B' : n<1048576 ? (n/1024).toFixed(1)+' KB' : n<1073741824 ? (n/1048576).toFixed(1)+' MB' : (n/1073741824).toFixed(2)+' GB';
@@ -4859,7 +5107,7 @@ function sources(){
 function render(){
   refreshView();
   renderNav();
-  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView, files:filesView, web:webView}[st.view];
+  const v = {overview, timeline, ips, sessions, sources, upload:uploadView, history:historyView, guide:guideView, files:filesView, web:webView, compare:compareView}[st.view];
   $('#main').innerHTML = rangeBar() + v();
   for(const id of ['rfrom','rto']){ const el = $('#'+id); if(el) el.onkeydown = ev=>{ if(ev.key==='Enter') document.querySelector('[data-act=rapply]').click(); }; }
   if(st.view==='timeline'){
@@ -4873,6 +5121,10 @@ function render(){
   if(st.view==='ips'){
     const si = $('#srvip');
     if(si) si.onchange = ()=>{ try{ localStorage.setItem('secview-server-ip', si.value.trim()); }catch(_){} SERVER_IPS = si.value.split(/[\s,]+/).filter(Boolean); if(!si.value.trim()) loadServerIps(); render(); };
+  }
+  if(st.view==='compare'){
+    document.querySelectorAll('.cv-pick').forEach(el=>{ el.onchange = ev=>{ cv.lanes[+el.dataset.li] = ev.target.value; render(); }; });
+    const w = $('#cvwin'); if(w) w.onchange = ev=>{ cv.win = +ev.target.value; render(); };
   }
   if(st.view==='guide'){
     const q = $('#gq'); let t;
@@ -4955,6 +5207,14 @@ document.addEventListener('click', ev=>{
     case 'wtype': wv.type=v||null; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
     case 'wpath': wv.q=v; wv.limit=300; { render(); const el=$('#wq'); if(el) el.scrollIntoView({block:'center'}); } break;
     case 'wmore': wv.limit+=500; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
+    case 'cvsel': if(cv.dragged) break; { const e = E[+v]; cv.sel = {t:e.ts, i:e._i}; render(); } break;
+    case 'cvfull': cv.full = true; render(); break;
+    case 'cvbin': { if(cv.dragged) break; const [li, i] = v.split(':').map(Number); const {a, b} = cvSpan();
+      const span = Math.max(b-a, 60); const lo = a + span*i/CV_N, hi = a + span*(i+1)/CV_N;
+      const L = laneOptions().find(x=>x.k===cv.lanes[li]); const inb = ER.filter(e=>e.ts!=null && e.ts>=lo && e.ts<hi && L && L.f(e)).sort((x,y)=>sr(y.sev)-sr(x.sev));
+      cv.sel = inb.length ? {t:inb[0].ts, i:inb[0]._i} : {t:(lo+hi)/2, i:null}; render(); break; }
+    case 'cvadd': { const used = new Set(cv.lanes); const nx = laneOptions().find(x=>!used.has(x.k)); if(nx){ cv.lanes.push(nx.k); render(); } break; }
+    case 'cvdel': cv.lanes.splice(+v, 1); render(); break;
     case 'lrother': document.body.classList.toggle('lr-all'); render(); break;
     case 'hfile': hv.file=+v; hv.q=''; render(); window.scrollTo(0,0); break;
     case 'hline': { const e = E[+v]; if(e) openEvent(+v); break; }

@@ -15,8 +15,10 @@ make_sample.py — secviewer 데모용 가상 침해 시나리오 로그 생성
   02:41  SFTP 로 압축 파일 다운로드(유출), 02:45 추가한 키로 scp 다운로드
   02:50  91.240.118.5 에서 백도어 계정 sysupd 로 재접속
 """
+import base64
 import datetime as dt
 import gzip
+import hashlib
 import os
 import random
 import struct
@@ -27,6 +29,18 @@ HOST = 'web01'
 ATK, ATK2, ADMIN = '45.133.1.77', '91.240.118.5', '10.0.0.15'
 SERVER_IP = '10.0.0.5'  # 이 서버(web01) 자신의 IP
 random.seed(7)
+
+
+def ed25519_key(seed):
+    """형식이 올바른 ssh-ed25519 공개키(랜덤 값)와 sshd 로그에 찍히는 SHA256 지문"""
+    rnd = random.Random(seed)
+    raw = struct.pack('>I', 11) + b'ssh-ed25519' + struct.pack('>I', 32) + bytes(rnd.getrandbits(8) for _ in range(32))
+    return base64.b64encode(raw).decode(), 'SHA256:' + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip('=')
+
+
+ALICE_KEY, ALICE_FP = ed25519_key('alice')
+OPS_KEY, OPS_FP = ed25519_key('ops-deploy')
+ATK_KEY, ATK_FP = ed25519_key('attacker')
 
 
 def T(hms, day=3):
@@ -77,7 +91,7 @@ ATTACK_CMDS = [
     ('02:27:15', 'nohup /tmp/.x/k.sh >/dev/null 2>&1 &', [['/tmp/.x/k.sh']]),
     ('02:28:40', 'useradd -o -u 0 -g 0 -M -s /bin/bash sysupd', [['useradd', '-o', '-u', '0', '-g', '0', '-M', '-s', '/bin/bash', 'sysupd']]),
     ('02:28:52', "echo 'sysupd:Upd@te99' | chpasswd", [['chpasswd']]),
-    ('02:29:30', "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7xq attacker@kali' >> /root/.ssh/authorized_keys", []),
+    ('02:29:30', f"echo 'ssh-ed25519 {ATK_KEY} attacker@kali' >> /root/.ssh/authorized_keys", []),
     ('02:30:05', "(crontab -l 2>/dev/null; echo '*/10 * * * * /tmp/.x/k.sh') | crontab -", [['crontab', '-l'], ['crontab', '-']]),
     ('02:31:20', 'unset HISTFILE', []),
     ('02:31:22', 'history -c', []),
@@ -134,7 +148,7 @@ def main():
 
     # ── 전날(auth.log.1): 평범한 관리 작업 ──
     prev = [
-        syslog(T('09:02:11', 2), 'sshd', 1101, f'Accepted publickey for alice from {ADMIN} port 50122 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt'),
+        syslog(T('09:02:11', 2), 'sshd', 1101, f'Accepted publickey for alice from {ADMIN} port 50122 ssh2: ED25519 {ALICE_FP}'),
         syslog(T('09:02:11', 2), 'sshd', 1101, 'pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)'),
         syslog(T('09:03:40', 2), 'sudo', 1130, '   alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx'),
         syslog(T('09:20:02', 2), 'sshd', 1101, f'Disconnected from user alice {ADMIN} port 50122'),
@@ -147,7 +161,7 @@ def main():
 
     # ── 01:30 alice 정상 접속 ──
     auth += [
-        syslog(T('01:30:12'), 'sshd', 1802, f'Accepted publickey for alice from {ADMIN} port 50312 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt'),
+        syslog(T('01:30:12'), 'sshd', 1802, f'Accepted publickey for alice from {ADMIN} port 50312 ssh2: ED25519 {ALICE_FP}'),
         syslog(T('01:30:12'), 'sshd', 1802, 'pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)'),
         syslog(T('01:31:05'), 'sudo', 1840, '   alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update'),
         syslog(T('01:31:05'), 'sudo', 1840, 'pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)'),
@@ -240,7 +254,7 @@ def main():
 
     # ── 02:45 심어둔 키로 scp 다운로드 (세션 3) ──
     auth += [
-        syslog(T('02:45:30'), 'sshd', 2420, f'Accepted publickey for root from {ATK} port 51766 ssh2: ED25519 SHA256:Atk3rK1ckK3yF1ngerPr1nt'),
+        syslog(T('02:45:30'), 'sshd', 2420, f'Accepted publickey for root from {ATK} port 51766 ssh2: ED25519 {ATK_FP}'),
         syslog(T('02:45:30'), 'sshd', 2420, 'pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)'),
         syslog(T('02:45:44'), 'sshd', 2420, f'Disconnected from user root {ATK} port 51766'),
         syslog(T('02:45:44'), 'sshd', 2420, 'pam_unix(sshd:session): session closed for user root'),
@@ -266,6 +280,8 @@ def main():
     write('var/log/audit/audit.log', '\n'.join(audit.lines) + '\n', mtime)
     write('root/.bash_history', '\n'.join(hist) + '\n', mtime)
     write('home/alice/.bash_history', 'sudo apt update\ndf -h\nls -la /var/www\nssh backup@10.0.0.30\nexit\n', mtime)
+    write('root/.ssh/authorized_keys', f'ssh-ed25519 {OPS_KEY} ops-deploy@bastion\nssh-ed25519 {ATK_KEY} attacker@kali\n', T('02:29:30'))
+    write('home/alice/.ssh/authorized_keys', f'ssh-ed25519 {ALICE_KEY} alice@laptop\n', T('09:00:00', 2))
     write('root/.ssh/known_hosts', '\n'.join([
         '10.0.0.30 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBk9backupserver',
         '10.0.0.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeploySrv20',
@@ -333,9 +349,9 @@ def main():
     write('var/log/nginx/access.log', '\n'.join(access_log()) + '\n', mtime)
     # 오래된 auth 로그: .3 은 있는데 .2 가 없다 (중간 파일이 지워진 흔적)
     write('var/log/auth.log.3.gz', '\n'.join([
-        syslog(dt.datetime(2026, 9, 18, 10, 11, 2, tzinfo=KST), 'sshd', 801,
-               f'Accepted publickey for alice from {ADMIN} port 49811 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt'),
-    ]) + '\n', dt.datetime(2026, 9, 20, 6, 25, tzinfo=KST), gz=True)
+        syslog(dt.datetime(2026, 10, 2, 8, 11, 2, tzinfo=KST), 'sshd', 801,
+               f'Accepted publickey for alice from {ADMIN} port 49811 ssh2: ED25519 {ALICE_FP}'),
+    ]) + '\n', dt.datetime(2026, 10, 2, 8, 20, tzinfo=KST), gz=True)
     write_configs(mtime)
 
     print(f'샘플 로그 생성: {ROOT}')

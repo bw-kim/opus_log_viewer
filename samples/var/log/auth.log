@@ -1,4 +1,4 @@
-Oct  3 01:30:12 web01 sshd[1802]: Accepted publickey for alice from 10.0.0.15 port 50312 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt
+Oct  3 01:30:12 web01 sshd[1802]: Accepted publickey for alice from 10.0.0.15 port 50312 ssh2: ED25519 SHA256:drqIZ6rFbgKKGwyMmqZULwk97ovtA+1qzi0Smjn33Cs
 Oct  3 01:30:12 web01 sshd[1802]: pam_unix(sshd:session): session opened for user alice(uid=1000) by (uid=0)
 Oct  3 01:31:05 web01 sudo[1840]:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update
 Oct  3 01:31:05 web01 sudo[1840]: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)
@@ -99,7 +99,7 @@ Oct  3 02:43:05 web01 internal-sftp[2392]: remove name "/tmp/.x/crm.sql"
 Oct  3 02:43:10 web01 internal-sftp[2392]: session closed for local user root from [45.133.1.77]
 Oct  3 02:43:10 web01 sshd[2390]: Disconnected from user root 45.133.1.77 port 51702
 Oct  3 02:43:10 web01 sshd[2390]: pam_unix(sshd:session): session closed for user root
-Oct  3 02:45:30 web01 sshd[2420]: Accepted publickey for root from 45.133.1.77 port 51766 ssh2: ED25519 SHA256:Atk3rK1ckK3yF1ngerPr1nt
+Oct  3 02:45:30 web01 sshd[2420]: Accepted publickey for root from 45.133.1.77 port 51766 ssh2: ED25519 SHA256:ZGWvHh7YQJwOzi+Y9Xi5ctSTUv+f9U3GKo2pJeinKmM
 Oct  3 02:45:30 web01 sshd[2420]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
 Oct  3 02:45:44 web01 sshd[2420]: Disconnected from user root 45.133.1.77 port 51766
 Oct  3 02:45:44 web01 sshd[2420]: pam_unix(sshd:session): session closed for user root
