@@ -2616,7 +2616,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 <style>
 :root{
   --bg:#0b0f15;--panel:#121821;--panel2:#18202b;--line:#253041;--line2:#1d2633;
-  --text:#e4eaf2;--muted:#8a97a8;--faint:#5c697b;--accent:#5b9dff;--accent-bg:#1a2b47;
+  --text:#e4eaf2;--muted:#8a97a8;--faint:#5c697b;--c-rest:#4a586b;--accent:#5b9dff;--accent-bg:#1a2b47;
   --crit:#ff4d5e;--high:#ff9a3d;--med:#e9c04a;--low:#58a6ff;--info:#6b7787;
   --crit-bg:rgba(255,77,94,.10);--high-bg:rgba(255,154,61,.07);
   --c-auth:#5b9dff;--c-session:#8f86f0;--c-cmd:#94a3b8;--c-db:#ff5f9e;--c-transfer:#ff9a3d;
@@ -2627,7 +2627,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 }
 :root[data-theme=light]{
   --bg:#f5f7fa;--panel:#ffffff;--panel2:#f0f3f7;--line:#d9dfe7;--line2:#e7ebf0;
-  --text:#18212d;--muted:#5d6b7c;--faint:#8b97a6;--accent:#2563eb;--accent-bg:#e5eeff;
+  --text:#18212d;--muted:#5d6b7c;--faint:#8b97a6;--c-rest:#b4bfcc;--accent:#2563eb;--accent-bg:#e5eeff;
   --crit:#d92638;--high:#d9690f;--med:#a77d00;--low:#2563eb;--info:#7a8594;
   --crit-bg:rgba(217,38,56,.07);--high-bg:rgba(217,105,15,.05);
   --c-auth:#2563eb;--c-session:#6d5ae6;--c-cmd:#64748b;--c-db:#d6337a;--c-transfer:#d9690f;
@@ -2776,6 +2776,44 @@ pre.raw{margin:0;padding:10px 12px;background:var(--panel2);border:1px solid var
 .ex-chk b{color:var(--high);margin-right:4px}
 .flow .expl{margin-top:4px}
 .flow .ex-sum,.sline .ex-sum{background:none;padding:0;color:var(--muted);font-size:12.5px}
+/* 날짜별 막대그래프 */
+.hhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:4px}
+.hhead h2{margin:0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-left:auto}
+.seg button{border:0;background:none;padding:4px 10px;font-size:12px;color:var(--muted);cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--accent-bg);color:var(--text);font-weight:600}
+.clegend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--muted);margin:6px 0 8px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px;flex:none}
+.s-hi{background:var(--crit)}
+.s-rest{background:var(--c-rest)}
+.smrow{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px;align-items:end}
+.smrow + .smrow{margin-top:4px}
+.smlab{display:flex;align-items:center;gap:0;font-size:12.5px;color:var(--text);min-width:0;padding-bottom:2px}
+.smlab span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.smlab b{margin-left:auto;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums;padding-left:6px}
+.smrow.main .smlab{font-weight:700}
+.smsep{margin:14px 0 6px;font-size:12.5px;font-weight:700;color:var(--muted)}
+.smsep small{font-weight:500;color:var(--faint);margin-left:6px}
+.hplot{display:grid;grid-template-columns:34px minmax(0,1fr);height:var(--h,100px)}
+.hplot.mini .yax span:last-child{display:none}
+.hplot.mini .yax span:first-child::before{content:"최대 ";display:none}
+.yax{display:flex;flex-direction:column;justify-content:space-between;font-size:10.5px;color:var(--faint);text-align:right;padding-right:6px;font-variant-numeric:tabular-nums;line-height:1}
+.bars{display:flex;align-items:stretch;gap:var(--gap,2px);border-bottom:1px solid var(--line);background:linear-gradient(var(--line2),var(--line2)) top/100% 1px no-repeat;min-width:0}
+.bcol{flex:1 1 0;min-width:0;display:flex;align-items:flex-end;justify-content:center;cursor:pointer;border-radius:3px 3px 0 0}
+.bcol:hover{background:color-mix(in srgb,var(--text) 7%,transparent)}
+.bcol.sel{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.bstack{width:100%;max-width:24px;display:flex;flex-direction:column-reverse;gap:2px;border-radius:4px 4px 0 0;overflow:hidden}
+.bstack i{display:block;min-height:1px}
+.xax{position:relative;height:18px;margin-left:34px;font-size:10.5px;color:var(--faint);white-space:nowrap}
+.xax span{position:absolute;top:3px;transform:translateX(-50%)}
+.ctip{position:fixed;z-index:300;display:none;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;min-width:150px;box-shadow:0 6px 24px rgba(0,0,0,.25);color:var(--text)}
+.ctip .th{font-weight:700;margin-bottom:4px;font-family:var(--mono);font-size:11.5px}
+.ctip .tr{display:flex;justify-content:space-between;gap:16px;color:var(--muted)}
+.ctip .tr b{color:var(--text);font-variant-numeric:tabular-nums}
+.ctip .tt{color:var(--text)}
+.ctip .tc{margin-top:4px;color:var(--faint);font-size:11px}
+@media (max-width:640px){.smrow{grid-template-columns:84px minmax(0,1fr);gap:6px}.smlab b{display:none}.hplot{grid-template-columns:26px minmax(0,1fr)}.xax{margin-left:26px}}
 /* 방향 · 파일 */
 .thsub{font-weight:500;color:var(--faint);font-size:11px;margin-left:4px}
 .dir{white-space:nowrap;font-family:var(--mono);font-size:12.5px;line-height:1.6}
@@ -2925,6 +2963,8 @@ const up = { server:null, busy:false, items:[], msg:'', err:'', job:null, append
 const hv = { file:0, q:'', risky:false };
 const st = { view:'overview', cats:new Set(), minSev:0, q:'', ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', limit:300, open:new Set(), hideNoise:true, explain:true };
 const fv = { q:'', only:false, focus:null };
+const ch = { bin:'auto', show:true };
+try{ ch.bin = localStorage.getItem('secview-bin') || 'auto'; ch.show = localStorage.getItem('secview-chart')!=='0'; }catch(_){}
 let SERVER_IPS = [];
 function loadServerIps(){ let v=null; try{ v=localStorage.getItem('secview-server-ip'); }catch(_){} SERVER_IPS = (v!=null && v!=='' ? v : (M.server_ips||[]).join(',')).split(/[\s,]+/).filter(Boolean); }
 const isSelf = ip => !!ip && (ip==='localhost' || ip==='::1' || ip.startsWith('127.') || SERVER_IPS.includes(ip));
@@ -2941,7 +2981,7 @@ function load(data){
   const risk = HIST.map(h=>h.entries.filter(([ln])=>{ const e=bySrcLine[h.path+':'+ln]; return e && sr(e.sev)>=3; }).length);
   hv.file = risk.length ? risk.indexOf(Math.max(...risk)) : 0;
   loadServerIps(); fv.q=''; fv.focus=null;
-  Object.assign(st, { view: E.length ? 'overview' : 'upload', cats:new Set(Object.keys(CATS)), minSev:0, q:'', ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', limit:300, open:new Set() });
+  Object.assign(st, { view: E.length ? 'overview' : 'upload', cats:new Set(Object.keys(CATS)), minSev:0, q:'', ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', range:null, rangeLabel:null, limit:300, open:new Set() });
 }
 load(JSON.parse(document.getElementById('secview-data').textContent));
 try{ const t=localStorage.getItem('secview-theme'); if(t) document.documentElement.dataset.theme=t; }catch(_){}
@@ -3137,9 +3177,9 @@ document.addEventListener('change', ev=>{
 
 /* ── 필터 ── */
 function searchText(e){ return e._s || (e._s = [e.msg,e.cmd,e.user,e.ip,e.raw,e.src,e.cwd,(e.tags||[]).join(' '),explText(e)].join(' ').toLowerCase()); }
-function filtered(){
-  const q = st.q.trim().toLowerCase();
-  return E.filter(e => st.cats.has(e.cat) && sr(e.sev)>=st.minSev && (!st.ip||e.ip===st.ip) && (!st.user||e.user===st.user)
+function filtered(ignoreRange){
+  const q = st.q.trim().toLowerCase(), rg = ignoreRange ? null : st.range;
+  return E.filter(e => (!rg || (e.ts!=null && e.ts>=rg[0] && e.ts<rg[1])) && st.cats.has(e.cat) && sr(e.sev)>=st.minSev && (!st.ip||e.ip===st.ip) && (!st.user||e.user===st.user)
     && (!st.sid||e.sid===st.sid) && (!st.hideNoise || st.ip || st.sid || st.scope==='in' || !isNoise(e)) && (!q || searchText(e).includes(q))
     && (st.scope==='all' || (st.scope==='in' ? e.dir==='in' : st.scope==='out' ? e.dir==='out' : !!e.files))
     && (!st.dest || (e.dest||[]).some(d=>d.host===st.dest)) && (!st.fpath || (e.files||[]).some(f=>f.path===st.fpath || f.to===st.fpath)));
@@ -3181,6 +3221,7 @@ function overview(){
       ${e.cmd?`<code>${esc(e.cmd)}</code>`:''}${explH(e,false)}
       ${filesH(e)}${originH(e)}<div class="who">${whoTxt(e)}${e.sid?` · 세션 ${esc(e.sid)}`:''} · ${esc(e.src||'')}</div></div></li>`;
   }).join('');
+  h += dateChartOverview();
   h += `<div class="grid2"><section class="panel"><h2>공격 흐름 <small>위험도 높음 이상 ${key.length}건, 시간순</small></h2>
     ${key.length?`<ul class="flow">${flow}</ul>${key.length>80?`<a data-act="kpi-high" class="more iconbtn" style="text-align:center">전체 ${key.length}건 타임라인에서 보기</a>`:''}`:'<div class="empty">높은 위험도 이벤트가 없습니다.</div>'}</section>
     <section><div class="panel" style="margin-bottom:16px"><h2>위험 IP <small>상위 ${Math.min(6,D.ips.length)}</small></h2>${D.ips.slice(0,6).map(ipMini).join('')||'<div class="empty">IP 정보 없음</div>'}</div>
@@ -3201,11 +3242,132 @@ function sessMini(s){
     <div style="font-size:12px;color:var(--muted)">${fmt(s.start)} · ${dur(s.start, s.end ?? s.last)} · 이벤트 ${s.n}</div></div>`;
 }
 
+/* ── 날짜별 막대그래프 ── */
+function binUnit(evs){
+  if(ch.bin !== 'auto') return ch.bin;
+  let lo = Infinity, hi = -Infinity;
+  for(const e of evs){ if(e.ts==null) continue; if(e.ts<lo) lo=e.ts; if(e.ts>hi) hi=e.ts; }
+  return lo!==Infinity && hi-lo <= 3*86400 ? 'hour' : 'day';
+}
+function makeBins(evs, unit){
+  const size = unit==='hour' ? 3600 : 86400, off = OFF*60;
+  let lo = Infinity, hi = -Infinity, unknown = 0;
+  for(const e of evs){ if(e.ts==null){ unknown++; continue; } const k=Math.floor((e.ts+off)/size); if(k<lo) lo=k; if(k>hi) hi=k; }
+  if(lo===Infinity) return {bins:[], unit, unknown};
+  if(unit==='hour' && hi-lo > 24*21) return makeBins(evs, 'day');   // 3주가 넘으면 시간별은 너무 촘촘함 → 일별
+  if(hi-lo > 1500) lo = hi-1500;
+  const bins = [];
+  for(let k=lo; k<=hi; k++) bins.push({start:k*size-off, end:(k+1)*size-off, n:0, hi:0, sev:{}, cats:{}});
+  for(const e of evs){
+    if(e.ts==null) continue;
+    const b = bins[Math.floor((e.ts+off)/size)-lo]; if(!b) continue;
+    b.n++; if(sr(e.sev)>=3) b.hi++;
+    b.sev[e.sev]=(b.sev[e.sev]||0)+1; b.cats[e.cat]=(b.cats[e.cat]||0)+1;
+  }
+  return {bins, unit, unknown};
+}
+const binLabel = (b, unit) => unit==='hour' ? `${iso(b.start).slice(5,10)} ${iso(b.start).slice(11,13)}시` : iso(b.start).slice(0,10);
+function niceMax(v){ if(v<=4) return Math.max(v,1); const p=Math.pow(10,Math.floor(Math.log10(v))); for(const m of [1,2,2.5,5,10]) if(m*p>=v) return m*p; return v; }
+function xAxis(bins, unit){
+  if(!bins.length) return '';
+  const n = bins.length, want = Math.max(2, Math.min(8, Math.floor(n/2)||2)), step = Math.max(1, Math.ceil(n/want));
+  let out = '', lastDay = '';
+  for(let i=0;i<n;i+=step){
+    const b = bins[i], d = iso(b.start).slice(5,10);
+    const t = unit==='hour' ? (d!==lastDay ? `${d} ${iso(b.start).slice(11,13)}시` : `${iso(b.start).slice(11,13)}시`) : d;
+    lastDay = d;
+    const x = (i+0.5)/n*100;
+    out += `<span style="left:${x}%;${i===0?'transform:none;left:0':''}">${t}</span>`;
+  }
+  return `<div class="xax">${out}</div>`;
+}
+const CHARTS = {};
+/* 막대 한 줄. mode='emph': 위험도 높음 이상(빨강) + 그 외(회색) / mode=카테고리 키: 그 분류 한 색 */
+function barRow(id, bins, unit, mode, height){
+  let max = 0; for(const b of bins){ const v = mode==='emph' ? b.n : (b.cats[mode]||0); if(v>max) max=v; }
+  const top = niceMax(max), n = bins.length, gap = n>160 ? 0 : n>70 ? 1 : 2;
+  CHARTS[id] = {bins, unit, mode};
+  const sel = st.range;
+  const cols = bins.map((b,i)=>{
+    const v = mode==='emph' ? b.n : (b.cats[mode]||0);
+    const isSel = sel && b.start>=sel[0] && b.end<=sel[1];
+    if(!v) return `<div class="bcol${isSel?' sel':''}" data-act="bin" data-c="${id}" data-i="${i}"></div>`;
+    const pct = v/top*100;
+    const inner = mode==='emph'
+      ? `${b.hi?`<i class="s-hi" style="flex:${b.hi}"></i>`:''}${b.n-b.hi?`<i class="s-rest" style="flex:${b.n-b.hi}"></i>`:''}`
+      : `<i style="flex:1;background:var(--c-${mode})"></i>`;
+    return `<div class="bcol${isSel?' sel':''}" data-act="bin" data-c="${id}" data-i="${i}"><div class="bstack" style="height:max(3px,${pct}%)">${inner}</div></div>`;
+  }).join('');
+  return `<div class="hplot${mode==='emph'?'':' mini'}" style="--h:${height}px" title="${mode==='emph'?'':'이 줄의 최대 '+max+'건'}"><div class="yax"><span>${top.toLocaleString()}</span><span>0</span></div>
+    <div class="bars" style="--gap:${gap}px">${cols}</div></div>`;
+}
+function unitSeg(){
+  return `<div class="seg" role="group" aria-label="막대 단위">${[['auto','자동'],['day','일별'],['hour','시간별']].map(([v,l])=>`<button data-act="binunit" data-v="${v}" class="${ch.bin===v?'on':''}">${l}</button>`).join('')}</div>`;
+}
+const LEGEND_EMPH = `<div class="clegend"><span><i class="sw s-hi"></i>위험도 높음 이상 (치명·높음)</span><span><i class="sw s-rest"></i>그 외</span></div>`;
+/* 개요: 전체 + 분류별 작은 막대(small multiples) */
+function dateChartOverview(){
+  const evs = E.filter(e=>!isNoise(e));
+  const {bins, unit, unknown} = makeBins(evs, binUnit(evs));
+  if(!bins.length) return '';
+  const cats = Object.keys(CATS).filter(c=>bins.some(b=>b.cats[c]));
+  const busiest = bins.reduce((a,b)=>b.n>a.n?b:a, bins[0]);
+  const rows = cats.map(c=>{
+    const tot = bins.reduce((a,b)=>a+(b.cats[c]||0),0);
+    return `<div class="smrow"><div class="smlab"><i class="sw" style="background:var(--c-${c})"></i><span>${esc(CATS[c])}</span><b>${tot.toLocaleString()}</b></div>${barRow('sm-'+c, bins, unit, c, 34)}</div>`;
+  }).join('');
+  return `<section class="panel hist" style="margin-bottom:16px">
+    <div class="hhead"><h2>${unit==='hour'?'시간별':'날짜별'} 발생 <small>가장 많은 때: ${binLabel(busiest, unit)} · ${busiest.n.toLocaleString()}건${unknown?` · 시각 미상 ${unknown}건 제외`:''} · 접속 잡음 제외</small></h2>${unitSeg()}</div>
+    ${LEGEND_EMPH}
+    <div class="smrow main"><div class="smlab"><span>전체</span><b>${evs.length.toLocaleString()}</b></div>${barRow('ov-main', bins, unit, 'emph', 110)}</div>
+    <div class="smsep">분류별 <small>각 줄은 그 분류 안에서의 최댓값 기준 · 막대를 누르면 그 기간의 타임라인</small></div>
+    ${rows}
+    <div class="smrow"><div class="smlab"></div>${xAxis(bins, unit)}</div>
+  </section>`;
+}
+/* 타임라인: 현재 필터 기준 (기간 선택은 강조만) */
+function dateChartTimeline(){
+  const evs = filtered(true);
+  const {bins, unit, unknown} = makeBins(evs, binUnit(evs));
+  if(!bins.length) return '';
+  if(!ch.show) return `<div class="toolbar"><button class="iconbtn" data-act="chartshow">▤ ${unit==='hour'?'시간별':'날짜별'} 그래프 보기</button></div>`;
+  return `<section class="panel hist" style="margin-bottom:10px;padding:12px 16px">
+    <div class="hhead"><h2 style="margin:0">${unit==='hour'?'시간별':'날짜별'} 건수 <small>지금 필터 기준${unknown?` · 시각 미상 ${unknown}건 제외`:''} · 막대를 누르면 그 기간만</small></h2>${unitSeg()}<button class="iconbtn" data-act="chartshow" title="그래프 접기">접기</button></div>
+    ${LEGEND_EMPH}
+    <div class="smrow main"><div class="smlab"></div>${barRow('tl-main', bins, unit, 'emph', 90)}</div>
+    <div class="smrow"><div class="smlab"></div>${xAxis(bins, unit)}</div></section>`;
+}
+/* 막대 툴팁 */
+const TIP = document.createElement('div'); TIP.className = 'ctip'; TIP.setAttribute('role','tooltip'); document.body.appendChild(TIP);
+document.addEventListener('mousemove', ev=>{
+  const c = ev.target.closest && ev.target.closest('.bcol');
+  if(!c){ TIP.style.display='none'; return; }
+  const C = CHARTS[c.dataset.c]; if(!C){ TIP.style.display='none'; return; }
+  const b = C.bins[+c.dataset.i];
+  let body;
+  if(C.mode==='emph'){
+    const sev = SEVS.slice().reverse().filter(x=>b.sev[x]).map(x=>`<div class="tr"><span>${SEV_L[x]}</span><b>${b.sev[x]}</b></div>`).join('');
+    const top = Object.entries(b.cats).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,n])=>`${esc(CATS[k])} ${n}`).join(' · ');
+    body = `<div class="tr tt"><span>총</span><b>${b.n.toLocaleString()}건</b></div>${sev}${top?`<div class="tc">${top}</div>`:''}`;
+  } else {
+    body = `<div class="tr tt"><span>${esc(CATS[C.mode])}</span><b>${(b.cats[C.mode]||0).toLocaleString()}건</b></div>`;
+  }
+  TIP.innerHTML = `<div class="th">${binLabel(b, C.unit)}${C.unit==='hour'?' ~ '+iso(b.end).slice(11,13)+'시':''}</div>${body}<div class="tc">클릭: 이 기간 타임라인</div>`;
+  TIP.style.display = 'block';
+  const w = TIP.offsetWidth, h = TIP.offsetHeight;
+  let x = ev.clientX + 14, y = ev.clientY - h - 10;
+  if(x + w > innerWidth - 8) x = ev.clientX - w - 14;
+  if(y < 8) y = ev.clientY + 16;
+  TIP.style.left = x+'px'; TIP.style.top = y+'px';
+});
+document.addEventListener('scroll', ()=>{ TIP.style.display='none'; }, true);
+
 /* ── 타임라인 ── */
 function timeline(){
   const cnt = {}; E.forEach(e=>cnt[e.cat]=(cnt[e.cat]||0)+1);
   const rows = filtered();
-  const pills = [['ip','IP'],['user','사용자'],['sid','세션'],['dest','⬆ 목적지'],['fpath','파일']].filter(([k])=>st[k]).map(([k,l])=>`<span class="pill">${l}: <b class="mono">${esc(st[k])}</b><button data-act="clr" data-v="${k}" aria-label="필터 해제">×</button></span>`).join('');
+  const pills = [['ip','IP'],['user','사용자'],['sid','세션'],['dest','⬆ 목적지'],['fpath','파일']].filter(([k])=>st[k]).map(([k,l])=>`<span class="pill">${l}: <b class="mono">${esc(st[k])}</b><button data-act="clr" data-v="${k}" aria-label="필터 해제">×</button></span>`).join('')
+    + (st.range ? `<span class="pill">기간: <b class="mono">${esc(st.rangeLabel||'')}</b><button data-act="clrrange" aria-label="기간 필터 해제">×</button></span>` : '');
   let h = `<div class="toolbar">
     <input class="search" id="q" placeholder="검색: 명령어, IP, 계정, 파일 경로, 원본 로그…" value="${esc(st.q)}">
     <select id="scope" title="접속 방향 / 파일 작업으로 좁혀 보기">${[['all','모든 이벤트'],['in','⬇ 들어온 접속 (다른 곳 → 이 서버)'],['out','⬆ 나간 접속 (이 서버 → 다른 곳)'],['file','📄 파일 작업 (저장·이동·삭제·전송)']].map(([v,l])=>`<option value="${v}" ${st.scope===v?'selected':''}>${l}</option>`).join('')}</select>
@@ -3215,6 +3377,7 @@ function timeline(){
     <button class="iconbtn" data-act="csv">CSV 내보내기</button></div>
   <div class="chips"><button class="chip" data-act="allcats" style="--c:var(--muted)">${st.cats.size===Object.keys(CATS).length?'모두 해제':'모두 선택'}</button>
     ${Object.keys(CATS).map(c=>`<button class="chip ${st.cats.has(c)?'on':''}" data-act="cat" data-v="${c}" style="--c:var(--c-${c})"><i></i>${esc(CATS[c])}<span class="n">${cnt[c]||0}</span></button>`).join('')}</div>
+  ${dateChartTimeline()}
   <div class="toolbar">${pills}<span class="count">${rows.length.toLocaleString()}건${rows.length>st.limit?` 중 ${st.limit.toLocaleString()}건 표시`:''}</span></div>`;
   if(!rows.length) return h+`<div class="tablewrap"><div class="empty">조건에 맞는 이벤트가 없습니다.</div></div>`;
   h += `<div class="tablewrap"><table><thead><tr><th>시각 (${esc(M.tz_label)})</th><th>위험</th><th>분류</th><th>사용자</th><th>IP <span class="thsub">⬇들어옴 ⬆나감</span></th><th>내용</th><th>출처</th></tr></thead><tbody>`;
@@ -3522,6 +3685,19 @@ document.addEventListener('click', ev=>{
     case 'ip': go('timeline',{ip:v,sid:null,dest:null,fpath:null,scope:'all',cats:new Set(Object.keys(CATS))}); break;
     case 'user': go('timeline',{user:v}); break;
     case 'clr': st[v]=null; render(); break;
+    case 'clrrange': st.range=null; st.rangeLabel=null; render(); break;
+    case 'binunit': ch.bin=v; try{ localStorage.setItem('secview-bin', v); }catch(_){} render(); break;
+    case 'chartshow': ch.show=!ch.show; try{ localStorage.setItem('secview-chart', ch.show?'1':'0'); }catch(_){} render(); break;
+    case 'bin': {
+      const C = CHARTS[t.dataset.c]; if(!C) break;
+      const b = C.bins[+t.dataset.i], lab = binLabel(b, C.unit) + (C.unit==='hour' ? ' ~ '+iso(b.end).slice(11,13)+'시' : '');
+      TIP.style.display = 'none';
+      const f = {range:[b.start, b.end], rangeLabel:lab, limit:300};
+      if(t.dataset.c.startsWith('sm-')) Object.assign(f, {cats:new Set([C.mode]), minSev:0});
+      if(st.view==='timeline'){ Object.assign(st, f); render(); }
+      else go('timeline', Object.assign(f, {ip:null, user:null, sid:null, dest:null, fpath:null, scope:'all', q:'', ...(t.dataset.c.startsWith('sm-')?{}:{cats:new Set(Object.keys(CATS)), minSev:0})}));
+      break;
+    }
     case 'more': st.limit+=500; render(); break;
     case 'csv': csv(); break;
     case 'row': { const i=+v; st.open.has(i)?st.open.delete(i):st.open.add(i); const y=window.scrollY; render(); window.scrollTo(0,y); break; }
