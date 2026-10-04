@@ -2999,6 +2999,7 @@ const isSelf = ip => !!ip && (ip==='localhost' || ip==='::1' || ip.startsWith('1
 try{ st.explain = localStorage.getItem('secview-explain')!=='0'; }catch(_){}
 function load(data){
   D = data; E = D.events; CATS = D.cats; M = D.meta; OFF = M.tz_offset_min;
+  VKEY = null; ER = null; V = null;   // 새 데이터가 들어오면 기간 필터 캐시를 버린다
   E.forEach((e,i)=>{ e._i=i; });
   bySid = {}; E.forEach(e=>{ if(e.sid) (bySid[e.sid] ||= []).push(e); });
   SESS = {}; D.sessions.forEach(s=>SESS[s.id]=s);
