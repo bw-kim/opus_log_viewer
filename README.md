@@ -16,7 +16,7 @@ python secviewer.py --web          # Windows 에서는 인자 없이 python secv
 로그 파일 / 폴더 / 압축파일(`zip`, `tar.gz`)을 끌어다 놓으면 바로 분석됩니다.
 
 - 서버에서 증거를 한 번에 모으는 명령:
-  `sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd`
+  `sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd /etc/logrotate.conf /etc/logrotate.d /etc/systemd/journald.conf /etc/audit/auditd.conf /etc/rsyslog.conf /etc/rsyslog.d`
   → 이 `evidence.tgz` 를 그대로 끌어다 놓으면 됩니다.
 - 파일 이름이 바뀌어 있어도(`messages`, `syslog`, `log1.txt` …) 내용을 보고 SSH / audit / MySQL / PostgreSQL / FTP / wtmp 로그를 자동 인식합니다.
 - 결과를 보는 중에 **새 로그를 또 끌어다 놓으면 지금 결과에 합쳐서** 다시 분석합니다(어느 탭에서든 가능).
