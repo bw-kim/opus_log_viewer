@@ -1911,7 +1911,7 @@ class Analyzer:
         if not files:
             return
         W = {'files': [], 'total': 0, 'status': Counter(), 'hourly': Counter(), 'hourly_s': Counter(), 'paths': Counter(),
-             'ips': {}, 'shells': {}, 'reqs': [], 'reqs_cut': 0, 'skipped': 0, 'all': [], 'big': [], 'proxied': 0}
+             'ips': {}, 'shells': {}, 'reqs': [], 'reqs_cut': 0, 'skipped': 0, 'all': [], 'big': [], 'proxied': 0, 'nosize': 0, 'partial': {}}
         clusters = {}
         for p in files:
             f = self.safe_open(p)
@@ -1944,6 +1944,8 @@ class Analyzer:
             ip = xff.group(1)          # 앞단 프록시 IP 대신 X-Forwarded-For 의 실제 접속 IP
             W['proxied'] += 1
         size = int(m['size']) if m['size'] and m['size'] != '-' else 0
+        if m['size'] in (None, '-'):
+            W['nosize'] += 1
         req = m['req'].replace('\\"', '"')
         parts = req.split(' ')
         method = parts[0] if len(parts) >= 2 else '-'
@@ -2013,6 +2015,11 @@ class Analyzer:
                 sh['ips'].append(ip)
             sh['first'], sh['last'] = min(sh['first'], ts), max(sh['last'], ts)
             sh['status'][status] += 1
+        if status == 206 and size and BACKUP_EXT.search(path):
+            pt = W['partial'].setdefault((ip, path), {'bytes': 0, 'n': 0, 'first': ts, 'last': ts, 'src': src, 'line': line, 'raw': raw[:2000]})
+            pt['bytes'] += size
+            pt['n'] += 1
+            pt['last'] = ts
         if 200 <= status < 300 and size >= 10 * 1024 * 1024:
             if BACKUP_EXT.search(path):
                 types.append('exfil')
@@ -2122,6 +2129,18 @@ class Analyzer:
             'top_paths': W['paths'].most_common(20), 'ips': ips[:300], 'ips_more': max(0, len(ips) - 300),
             'shells': shells[:100], 'reqs': W['reqs'], 'reqs_cut': W['reqs_cut'], 'skipped': W['skipped'],
         }
+        for (pip, ppath), pt in W['partial'].items():
+            if pt['n'] >= 2 and pt['bytes'] >= 10 * 1024 * 1024:
+                self.add(pt['first'], 'web', 'crit', f'{WEB_TYPE_LABEL["exfil"]} — 이어받기(206) {pt["n"]}조각 합계 {human_bytes(pt["bytes"])}',
+                         kind='web', webtype='exfil', ip=pip, cmd=f'GET {ppath}', path=ppath, status=206, src=pt['src'],
+                         line=pt['line'], raw=pt['raw'], count=pt['n'], until=pt['last'], tags=['206 Partial Content', '조각 합산'])
+                st = W['ips'].get(pip)
+                if st is not None:
+                    st['types']['exfil'] = st['types'].get('exfil', 0) + 1
+        self.web['nosize'] = W['nosize']
+        if W['total'] and W['nosize'] / W['total'] > 0.5:
+            self.notes.append(f'웹 로그 {W["nosize"]:,}/{W["total"]:,}건에 응답 크기가 기록돼 있지 않습니다(로그 형식에 $body_bytes_sent·%b 없음 또는 "-"). '
+                              '이 경우 크기 기반의 웹 유출(대용량 다운로드) 판단은 할 수 없습니다.')
         if W['proxied']:
             self.notes.append(f'웹 로그 {W["proxied"]}건은 프록시 뒤에서 기록돼, X-Forwarded-For 의 실제 접속 IP 로 바꿔 분석했습니다.')
 
@@ -4415,7 +4434,8 @@ function webView(){
       <td class="mono t">${fmt(x.first).slice(5,16)} ~ ${fmt(x.last).slice(5,16)}</td><td class="ua">${esc((x.ua||[])[0]||'')}</td></tr>`).join('')}
     </tbody></table></div></section>`;
   // 큰 응답 · 많이 요청된 경로
-  h += `<div class="grid2" style="margin-bottom:12px"><section class="panel"><h2>큰 응답 <small>많이 내려받아 간 요청 — 백업·덤프 파일이면 유출 의심</small></h2>
+  h += `<div class="grid2" style="margin-bottom:12px"><section class="panel"><h2>큰 응답 <small>access log 의 응답 크기($body_bytes_sent · %b, 상태 코드 바로 뒤 숫자) 기준 · 백업·덤프 파일이 2xx 로 크게 나갔으면 유출 의심</small></h2>
+    ${W.nosize && W.nosize > W.total/2 ? `<div class="notes" style="margin:6px 0 8px"><div>이 로그에는 응답 크기가 거의 기록돼 있지 않아(${W.nosize.toLocaleString()}건) 크기로 유출을 판단할 수 없습니다.</div></div>` : ''}
     ${big.length?`<div class="tablewrap" style="border:0"><table style="min-width:520px"><tbody>${big.slice(0,15).map(b=>`<tr><td class="mono">${fmtBytes(b.sz)}</td><td class="m"><code>${esc(b.m)} ${esc(b.u)}</code></td>
       <td><span class="hs ${stCls(b.st)}">${b.st}</span></td><td class="mono"><a data-act="wip" data-v="${esc(b.ip)}">${esc(b.ip)}</a></td><td class="t">${fmt(b.ts).slice(5,16)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">없음</div>'}</section>
     <section class="panel"><h2>많이 요청된 경로 <small>전체 기간</small></h2>
