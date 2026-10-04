@@ -1223,6 +1223,139 @@ def shell_join(args):
     return ' '.join(out)
 
 
+# ───────────────────────── 로그 보관 설정 (logrotate / journald / auditd / rsyslog) ─────────────────────────
+FREQ_DAYS = {'hourly': 1 / 24, 'daily': 1, 'weekly': 7, 'monthly': 30, 'yearly': 365}
+FREQ_KO = {'hourly': '1시간', 'daily': '하루', 'weekly': '일주일', 'monthly': '한 달', 'yearly': '1년'}
+LOG_FAMILY = [('auth', 'SSH·계정 로그', r'/var/log/(?:auth\.log|secure)\b'), ('syslog', '시스템 로그', r'/var/log/(?:syslog|messages)\b'),
+              ('wtmp', '로그인 기록 (wtmp·btmp)', r'/var/log/[wb]tmp\b'), ('web', '웹 로그', r'/var/log/(?:nginx|apache2|httpd|apache|lighttpd)/'),
+              ('db', 'DB 로그', r'/var/log/(?:mysql|mariadb|postgresql)'), ('audit', 'audit 로그', r'/var/log/audit/'),
+              ('ftp', 'FTP 로그', r'xferlog|vsftpd'), ('cron', 'cron 로그', r'/var/log/cron')]
+FAMILY_ORDER = [f[0] for f in LOG_FAMILY] + ['other']
+
+
+def _lr_directive(d, k):
+    key, val = k[0].lower(), (k[1] if len(k) > 1 else None)
+    if key in FREQ_DAYS:
+        d['freq'] = key
+    elif key == 'rotate' and val and re.fullmatch(r'-?\d+', val):
+        d['rotate'] = int(val)
+    elif key == 'maxage' and val and val.isdigit():
+        d['maxage'] = int(val)
+    elif key in ('size', 'maxsize', 'minsize') and val:
+        d[key] = val
+    elif key in ('compress', 'nocompress'):
+        d['compress'] = key == 'compress'
+    elif key in ('dateext', 'nodateext'):
+        d['dateext'] = key == 'dateext'
+    elif key in ('shred', 'noshred'):
+        d['shred'] = key == 'shred'
+    elif key == 'copytruncate':
+        d['copytruncate'] = True
+    elif key == 'olddir' and val:
+        d['olddir'] = val
+
+
+def parse_logrotate(text, base):
+    """logrotate 설정 → (블록 목록, 블록 밖 기본값)"""
+    cur, entries, block, skip, pending = dict(base), [], None, False, None
+    for raw in text.splitlines():
+        line = raw.split('#', 1)[0].strip() if not raw.lstrip().startswith('#') else ''
+        if not line:
+            continue
+        if skip:
+            if line == 'endscript':
+                skip = False
+            continue
+        if block is not None:
+            if line.startswith('}'):
+                entries.append(dict(block, paths=paths))
+                block = None
+                continue
+            k = line.split()
+            if k[0] in ('postrotate', 'prerotate', 'firstaction', 'lastaction', 'preremove'):
+                skip = True
+                continue
+            _lr_directive(block, k)
+            continue
+        if line.endswith('{'):
+            head = line[:-1].strip()
+            paths = [x.strip('"\'') for x in (pending or []) + head.split()]   # 경로가 여러 줄에 걸쳐 있을 수 있음
+            block, pending = dict(cur), None
+            continue
+        if line.startswith(('/', '"', "'")):
+            pending = (pending or []) + line.split()
+            continue
+        k = line.split()
+        if k[0] != 'include':
+            _lr_directive(cur, k)
+    return entries, cur
+
+
+def _days_ko(days):
+    if days is None:
+        return None
+    if days < 1:
+        return f'{days * 24:.0f}시간'
+    if days < 60:
+        return f'{days:.0f}일'
+    if days < 730:
+        return f'약 {days / 30:.0f}개월'
+    return f'약 {days / 365:.0f}년'
+
+
+def lr_estimate(e):
+    """보관 기간 추정 (일) 과 쉬운 설명"""
+    rot, freq, size = e.get('rotate', 0), e.get('freq'), e.get('size')
+    keep = '예전 파일을 남기지 않음(교체할 때 지움)' if rot == 0 else ('예전 파일을 개수 제한 없이 보관' if rot < 0 else f'예전 파일 {rot}개 보관')
+    days = None
+    if size and not freq:
+        desc = f'용량이 {size} 를 넘을 때마다 새 파일로 바꾸고 {keep} — 기간은 로그가 쌓이는 양에 따라 다름'
+    elif freq:
+        if rot >= 0:
+            days = FREQ_DAYS[freq] * (rot + 1)
+        desc = f'{FREQ_KO[freq]}마다 새 파일로 바꾸고 {keep}' + (f' (또는 {size} 넘으면 바로 교체)' if size else '')
+    else:
+        desc = f'교체 주기 설정 없음, {keep}'
+    if e.get('maxage'):
+        days = min(days, e['maxage']) if days else e['maxage']
+        desc += f', {e["maxage"]}일 지난 파일은 삭제'
+    return days, desc
+
+
+def log_family(paths):
+    for fid, _, rx in LOG_FAMILY:
+        if any(re.search(rx, x) for x in paths):
+            return fid
+    return 'other'
+
+
+def _kv_conf(text, sep='='):
+    out = {}
+    for line in text.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line or line.startswith('[') or sep not in line:
+            continue
+        k, v = line.split(sep, 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _size_mb(v):
+    m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*([KMGT]?)i?B?', (v or '').strip(), re.I)
+    if not m:
+        return None
+    return float(m[1]) * {'': 1 / 1048576, 'K': 1 / 1024, 'M': 1, 'G': 1024, 'T': 1048576}[m[2].upper()]
+
+
+def _sec_days(v):
+    m = re.fullmatch(r'(\d+)\s*(s|sec|min|m|h|hour|d|day|w|week|month|y|year)?s?', (v or '').strip(), re.I)
+    if not m:
+        return None
+    mult = {'s': 1 / 86400, 'sec': 1 / 86400, 'min': 1 / 1440, 'm': 1 / 1440, 'h': 1 / 24, 'hour': 1 / 24, 'd': 1, 'day': 1,
+            'w': 7, 'week': 7, 'month': 30, 'y': 365, 'year': 365}[(m[2] or 's').lower()]
+    return int(m[1]) * mult
+
+
 # ───────────────────────── 분석기 ─────────────────────────
 class Analyzer:
     def __init__(self, root, tz, year=None, audit_all=False, use_journal=True, since=None, server_ips=(), until=None):
@@ -1243,6 +1376,7 @@ class Analyzer:
         self.histories = []
         self.known_hosts = []
         self.web = None
+        self.retention = None
         self.server_ips = {x.strip() for x in server_ips if x and x.strip()}
         self.server_ips_auto = set()
         self.has_auth = False
@@ -1324,6 +1458,7 @@ class Analyzer:
         self.scan_postgres()
         self.scan_ftp()
         self.scan_known_hosts()
+        self.scan_retention()
         self.scan_web()
         if self.since:
             self.events = [e for e in self.events if e['ts'] is None or e['ts'] >= self.since]
@@ -2146,6 +2281,190 @@ class Analyzer:
         if W['proxied']:
             self.notes.append(f'웹 로그 {W["proxied"]}건은 프록시 뒤에서 기록돼, X-Forwarded-For 의 실제 접속 IP 로 바꿔 분석했습니다.')
 
+    def scan_retention(self):
+        R = {'files': [], 'logrotate': [], 'journald': None, 'auditd': None, 'rsyslog': None, 'findings': []}
+        add = lambda level, text: R['findings'].append({'level': level, 'text': text})
+        has_varlog = os.path.isdir(os.path.join(self.root, 'var', 'log'))
+
+        def read(path):
+            f = self.safe_open(path)
+            if not f:
+                return None
+            with f:
+                R['files'].append(self.rel(path))
+                return f.read()
+
+        # logrotate
+        base = os.path.join(self.root, 'etc', 'logrotate.conf')
+        defaults = {}
+        if os.path.isfile(base):
+            text = read(base)
+            if text is not None:
+                ents, defaults = parse_logrotate(text, {})
+                for e in ents:
+                    e['file'] = self.rel(base)
+                R['logrotate'] += ents
+        for path in sorted(glob.glob(os.path.join(self.root, 'etc', 'logrotate.d', '*'))):
+            if not os.path.isfile(path) or re.search(r'(?:\.dpkg-\w+|\.rpm(?:save|new|orig)|~|\.bak)$', path):
+                continue
+            text = read(path)
+            if text is None:
+                continue
+            ents, _ = parse_logrotate(text, defaults)
+            for e in ents:
+                e['file'] = self.rel(path)
+            R['logrotate'] += ents
+        for e in R['logrotate']:
+            e['days'], e['desc'] = lr_estimate(e)
+            e['family'] = log_family(e['paths'])
+            e['label'] = next((l for f, l, _ in LOG_FAMILY if f == e['family']), '기타')
+            # 실제로 남아 있는 예전 파일 — 설정 블록의 경로마다 따로 센다
+            if has_varlog:
+                per = []
+                for pth in e['paths']:
+                    bases = [x for x in glob.glob(os.path.join(self.root, pth.lstrip('/'))) if os.path.isfile(x)
+                             and not re.search(r'\.(?:\d+|gz|xz|bz2|zst)$|-\d{8}', x)] if any(c in pth for c in '*?[') else \
+                        [os.path.join(self.root, pth.lstrip('/'))]
+                    for b in bases:
+                        cands = glob.glob(b + '.*') + glob.glob(b + '-*')
+                        if e.get('olddir'):
+                            od = e['olddir'] if e['olddir'].startswith('/') else os.path.join(os.path.dirname(pth), e['olddir'])
+                            cands += glob.glob(os.path.join(self.root, od.lstrip('/'), os.path.basename(b) + '*'))
+                        rot = [x for x in cands if os.path.isfile(x) and not x.endswith(('.dpkg-old', '.rpmsave'))]
+                        if not os.path.isfile(b) and not rot:
+                            continue
+                        nums = sorted({int(m.group(1)) for x in rot for m in [re.search(r'\.(\d+)(?:\.gz|\.xz|\.bz2|\.zst)?$', x)] if m})
+                        item = {'path': self.rel(b), 'current': int(os.path.isfile(b)), 'rotated': len(rot),
+                                'gaps': [n for n in range(1, nums[-1]) if n not in nums] if nums else []}
+                        if rot:
+                            item['oldest'] = min(os.path.getmtime(x) for x in rot)
+                        per.append(item)
+                        if item['gaps'] and item['current']:
+                            add('crit', f'{item["path"]} 의 예전 파일 중 .{", .".join(map(str, item["gaps"]))} 번만 빠져 있습니다 '
+                                        f'(.{nums[-1]} 까지 있음). 번호가 중간에 비면 누군가 그 파일만 지웠을 가능성이 큽니다.')
+                e['per'] = per
+        for e in R['logrotate']:
+            if e['family'] != 'auth':
+                continue
+            if e.get('rotate', 0) == 0:
+                add('warn', f'SSH·계정 로그({", ".join(e["paths"])})가 교체될 때 예전 파일을 남기지 않습니다(rotate 0). 교체 시점 이전 기록은 사라집니다.')
+            elif e['days'] is not None and e['days'] < 30:
+                add('warn', f'SSH·계정 로그는 약 {_days_ko(e["days"])}치만 보관하도록 설정돼 있습니다. 사고를 늦게 발견하면 침입 당시 기록이 이미 지워졌을 수 있습니다.')
+            if e.get('shred'):
+                add('warn', 'logrotate 에 shred 옵션이 있어 예전 로그를 지울 때 덮어써서 복구할 수 없게 합니다.')
+            for it in e.get('per', []):
+                if re.search(r'/(?:auth\.log|secure)$', it['path']) and it['current'] and e.get('rotate', 0) > 0 and it['rotated'] < e['rotate']:
+                    add('check', f'{it["path"]} 의 예전 파일이 설정상 최대 {e["rotate"]}개인데 {it["rotated"]}개만 있습니다. '
+                                 '서버를 설치한 지 얼마 안 됐다면 정상이고, 오래된 서버라면 예전 로그가 지워졌을 수 있습니다.')
+
+        # journald
+        jtexts = [os.path.join(self.root, 'etc', 'systemd', 'journald.conf')] + \
+            sorted(glob.glob(os.path.join(self.root, 'etc', 'systemd', 'journald.conf.d', '*.conf')))
+        jc = {}
+        for path in jtexts:
+            if os.path.isfile(path):
+                text = read(path)
+                if text is not None:
+                    jc.update(_kv_conf(text))
+        if any(os.path.isfile(x) for x in jtexts):
+            storage = jc.get('Storage', 'auto').lower()
+            jdir = os.path.isdir(os.path.join(self.root, 'var', 'log', 'journal'))
+            if storage == 'persistent' or (storage == 'auto' and jdir):
+                mode = 'disk'
+            elif storage in ('volatile', 'none'):
+                mode = storage
+            else:
+                mode = 'auto-unknown' if not has_varlog else 'memory'
+            J = {'storage': storage, 'mode': mode, 'max_use': jc.get('SystemMaxUse'), 'keep_free': jc.get('SystemKeepFree'),
+                 'max_retention': jc.get('MaxRetentionSec'), 'max_file': jc.get('MaxFileSec'), 'forward_syslog': jc.get('ForwardToSyslog')}
+            parts = []
+            if mode == 'disk':
+                parts.append('journal 을 디스크(/var/log/journal)에 저장합니다')
+            elif mode == 'memory':
+                parts.append('/var/log/journal 폴더가 없어 메모리에만 저장합니다 — 재부팅하면 사라집니다')
+            elif mode == 'volatile':
+                parts.append('Storage=volatile: 메모리에만 저장해 재부팅하면 사라집니다')
+            elif mode == 'none':
+                parts.append('Storage=none: journal 을 저장하지 않습니다')
+            else:
+                parts.append('Storage=auto: /var/log/journal 폴더가 있으면 디스크에, 없으면 메모리에만 저장합니다')
+            parts.append(f'최대 용량 {J["max_use"]}' if J['max_use'] else '최대 용량은 기본값(파일시스템의 10%, 최대 4GB)')
+            if J['max_retention'] and J['max_retention'] not in ('0',):
+                d = _sec_days(J['max_retention'])
+                parts.append(f'{_days_ko(d) if d else J["max_retention"]} 지난 기록은 삭제')
+            else:
+                parts.append('기간 제한 없음(용량이 차면 오래된 것부터 삭제)')
+            J['desc'] = ' · '.join(parts)
+            R['journald'] = J
+            if mode in ('memory', 'volatile', 'none'):
+                add('warn', 'journald 가 디스크에 기록을 남기지 않는 설정입니다. 재부팅하면 journal 이 사라지므로, 조사 전에는 재부팅하지 마세요.')
+
+        # auditd
+        apath = os.path.join(self.root, 'etc', 'audit', 'auditd.conf')
+        if os.path.isfile(apath):
+            text = read(apath)
+            if text is not None:
+                ac = {k.lower(): v for k, v in _kv_conf(text).items()}
+                size = float(ac.get('max_log_file', 8) or 8)
+                num = int(ac.get('num_logs', 5) or 5)
+                action = ac.get('max_log_file_action', 'ROTATE').upper()
+                A = {'max_log_file': size, 'num_logs': num, 'action': action, 'log_file': ac.get('log_file', '/var/log/audit/audit.log'),
+                     'space_left_action': ac.get('space_left_action'), 'disk_full_action': ac.get('disk_full_action')}
+                if action == 'ROTATE':
+                    A['desc'] = f'파일이 {size:g}MB 가 되면 새 파일로 바꾸고 {num}개까지 보관 → 약 {size * num:g}MB 넘으면 가장 오래된 것부터 지움'
+                    if size * num < 100:
+                        add('info', f'audit 로그는 전체 약 {size * num:g}MB 까지만 보관합니다. 명령 감시(execve)를 켜 두면 며칠 만에 넘칠 수 있습니다.')
+                elif action == 'KEEP_LOGS':
+                    A['desc'] = f'파일이 {size:g}MB 가 되면 새 파일로 바꾸되 예전 파일을 지우지 않음 (디스크가 찰 수 있음)'
+                elif action in ('IGNORE', 'SYSLOG'):
+                    A['desc'] = '파일 크기 제한 동작 없음 — 파일이 계속 커짐'
+                elif action in ('SUSPEND', 'HALT', 'SINGLE'):
+                    A['desc'] = f'파일이 {size:g}MB 가 되면 {action} (기록 중단 또는 시스템 정지)'
+                else:
+                    A['desc'] = f'max_log_file_action = {action}'
+                R['auditd'] = A
+
+        # rsyslog
+        rtexts = [os.path.join(self.root, 'etc', 'rsyslog.conf')] + sorted(glob.glob(os.path.join(self.root, 'etc', 'rsyslog.d', '*.conf')))
+        rules, remotes = [], []
+        for path in rtexts:
+            if not os.path.isfile(path):
+                continue
+            text = read(path)
+            if text is None:
+                continue
+            rp = self.rel(path)
+            for m in re.finditer(r'action\s*\(([^)]*type\s*=\s*"om(?:fwd|relp)"[^)]*)\)', text, re.S):
+                body = m.group(1)
+                tg = re.search(r'target\s*=\s*"([^"]+)"', body)
+                pt = re.search(r'port\s*=\s*"([^"]+)"', body)
+                pr = re.search(r'protocol\s*=\s*"([^"]+)"', body)
+                if tg:
+                    remotes.append({'target': tg[1] + (':' + pt[1] if pt else ''), 'proto': (pr[1] if pr else 'udp').upper(), 'selector': '(설정 블록)', 'file': rp})
+            for line in text.splitlines():
+                line = line.split('#', 1)[0].strip()
+                if not line or line.startswith(('$', 'module(', 'input(', 'global(', 'template(', 'include(', 'if ', '&', '~', ':', 'action(', 'ruleset(', 'main_queue(')):
+                    continue
+                m = re.match(r'^([*\w.,;=!\-]+)\s+(-?/\S+|@@?\(?[^\s;]+|\S+)', line)
+                if not m or '.' not in m[1]:
+                    continue
+                sel, act = m[1], m[2]
+                if act.startswith('@'):
+                    remotes.append({'target': act.lstrip('@').lstrip('(').split(')')[-1] or act, 'proto': 'TCP' if act.startswith('@@') else 'UDP', 'selector': sel, 'file': rp})
+                elif act.lstrip('-').startswith('/'):
+                    rules.append({'selector': sel, 'target': act.lstrip('-'), 'file': rp})
+        if any(os.path.isfile(x) for x in rtexts):
+            R['rsyslog'] = {'rules': rules, 'remotes': remotes}
+            for r in remotes:
+                add('good', f'rsyslog 이 {r["selector"]} 로그를 원격 서버 {r["target"]} ({r["proto"]}) 로도 보내고 있습니다. '
+                            '이 서버의 로그가 지워졌어도 그 서버에 사본이 남아 있을 수 있습니다.')
+        if R['files']:
+            R['logrotate'].sort(key=lambda e: (FAMILY_ORDER.index(e['family']), e['paths'][0]))
+            self.retention = R
+            for f in R['findings']:
+                if f['level'] in ('crit', 'warn', 'good'):
+                    self.notes.append('[보관 설정] ' + f['text'])
+
     def scan_known_hosts(self):
         for p in self.paths('root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*'):
             rp = self.rel(p)
@@ -2583,6 +2902,7 @@ class Analyzer:
             'files': file_list,
             'web': self.web,
             'known_hosts': self.known_hosts,
+            'retention': self.retention,
         }
 
 
@@ -2769,7 +3089,7 @@ CMD_GUIDE = [
     ]},
     {'id': 'evidence', 'name': '증거 모으기·보존', 'desc': '분석 전에 원본을 보존하고, 이 뷰어에 올릴 파일을 만듭니다.', 'items': [
         ["date ; timedatectl", '서버의 현재 시각과 시간대 확인', '로그 시각을 해석하는 기준입니다. 이 뷰어 업로드 화면의 "로그 시간대"를 여기에 맞추세요.'],
-        ["sudo tar czf evidence_$(hostname)_$(date +%F).tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd /etc/group /root/.ssh /home/*/.ssh /var/spool/cron",
+        ["sudo tar czf evidence_$(hostname)_$(date +%F).tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd /etc/group /root/.ssh /home/*/.ssh /var/spool/cron /etc/logrotate.conf /etc/logrotate.d /etc/systemd/journald.conf /etc/audit/auditd.conf /etc/rsyslog.conf /etc/rsyslog.d",
          '조사에 필요한 로그·설정을 한 파일로 모으기', '이 파일을 그대로 이 뷰어에 끌어다 놓으면 됩니다. /var/log 가 크면 --exclude=/var/log/journal 을 붙이세요.'],
         ["sha256sum evidence_*.tgz | tee evidence.sha256", '모은 증거의 해시를 남겨 변조되지 않았음을 증명', 'tee 는 화면에 보여주면서 파일로도 저장합니다.'],
         ["journalctl -o short-iso --since '2026-10-01' > journal_$(hostname).txt",
@@ -2796,7 +3116,8 @@ def empty_data(tz):
 
 # ───────────────────────── 웹 업로드 ─────────────────────────
 # 브라우저에서 올린 파일(개별 파일, 폴더, zip/tar.gz)을 임시 디렉터리에 / 구조로 배치한 뒤 Analyzer 로 분석한다.
-SCAN_GLOBS = ['var/log/nginx/*access*', 'var/log/apache2/*access*', 'var/log/httpd/*access*', 'var/log/apache/*access*',
+SCAN_GLOBS = ['etc/logrotate.conf', 'etc/logrotate.d/*', 'etc/systemd/journald.conf', 'etc/systemd/journald.conf.d/*',
+              'etc/audit/auditd.conf', 'etc/rsyslog.conf', 'etc/rsyslog.d/*', 'var/log/nginx/*access*', 'var/log/apache2/*access*', 'var/log/httpd/*access*', 'var/log/apache/*access*',
               'var/log/lighttpd/*access*', 'var/log/www/*access*', 'root/.ssh/known_hosts*', 'home/*/.ssh/known_hosts*', 'var/log/auth.log*', 'var/log/secure*', 'var/log/audit/audit.log*', 'var/log/wtmp*', 'var/log/btmp*',
               'root/.*_history', 'root/.history', 'home/*/.*_history', 'home/*/.history', 'var/lib/*/.*_history',
               'srv/*/.*_history', 'var/log/mysql/*.log*', 'var/log/mysql*.log*', 'var/log/mariadb/*.log*',
@@ -2855,7 +3176,8 @@ def place_target(name, path, n):
         return None
     # 1) 원래 경로 구조 유지 (evidence/var/log/auth.log → var/log/auth.log)
     s = '/' + joined
-    idx = [i for i in (s.find('/' + m) for m in ('var/log/', 'root/', 'home/', 'etc/passwd', 'var/lib/', 'srv/')) if i >= 0]
+    idx = [i for i in (s.find('/' + m) for m in ('var/log/', 'root/', 'home/', 'etc/passwd', 'etc/logrotate', 'etc/systemd/', 'etc/audit/', 'etc/rsyslog',
+                                                      'var/lib/', 'srv/')) if i >= 0]
     if idx:
         cand = s[min(idx) + 1:]
         if any(fnmatch.fnmatchcase(cand, g) for g in SCAN_GLOBS):
@@ -2872,6 +3194,7 @@ def place_target(name, path, n):
         return f'home/{user}/.{m[1]}_history' if user else f'root/.{m[1]}_history'
     for rx, d in ((r'^(?:auth\.log|secure)', 'var/log/'), (r'^audit\.log', 'var/log/audit/'), (r'^[wb]tmp', 'var/log/'),
                   (r'^(?:xferlog|vsftpd\.log)', 'var/log/'), (r'^passwd$', 'etc/'), (r'^known_hosts', 'root/.ssh/'),
+                  (r'^logrotate\.conf$', 'etc/'), (r'^journald\.conf$', 'etc/systemd/'), (r'^auditd\.conf$', 'etc/audit/'), (r'^rsyslog\.conf$', 'etc/'),
                   (r'^(?:access[._-]?log|access_log|.*[._-]access[._-]?log)', 'var/log/nginx/')):
         if re.match(rx, bl):
             return d + b + gzs
@@ -2975,6 +3298,11 @@ class UploadJob:
             s['path'] = rename(s['path'])
         for h in data['histories'] + data['known_hosts'] + ((data.get('web') or {}).get('files') or []):
             h['path'] = rename(h['path'])
+        if data.get('retention'):
+            R = data['retention']
+            R['files'] = [rename(x) for x in R['files']]
+            for e in R['logrotate']:
+                e['file'] = rename(e['file'])
         for r in ((data.get('web') or {}).get('reqs') or []):
             r['src'] = rename(r['src'])
         data['meta']['root'] = f'웹 업로드 ({len(self.names)}개 파일)'
@@ -3447,6 +3775,15 @@ h2.sect small{margin:0}
 .hs.s4{color:var(--high);border-color:color-mix(in srgb,var(--high) 40%,transparent)}
 .hs.s5{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
 td.ua{font-size:11.5px;color:var(--faint);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 보관 설정 */
+.rfind{display:grid;gap:6px;margin:4px 0 12px;font-size:13px}
+.badge.warn{color:var(--high);border-color:color-mix(in srgb,var(--high) 45%,transparent);background:var(--high-bg)}
+h3.rh{font-size:13.5px;margin:12px 0 6px}
+.lr-path{font-size:11.5px;color:var(--muted);word-break:break-all}
+.lr-days{white-space:nowrap;font-weight:700}
+.lr-per{font-size:12.5px;white-space:nowrap}
+tr.lr-other{display:none}
+body.lr-all tr.lr-other{display:table-row}
 /* 히스토리 */
 .hgrid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:860px){.hgrid{grid-template-columns:1fr}}
@@ -3669,6 +4006,7 @@ const SUPPORTED = [
   ['PostgreSQL 로그', '/var/log/postgresql', 'pg_dump 접속, COPY TO 추출'],
   ['xferlog, vsftpd.log', '/var/log', 'FTP 업로드·다운로드'],
   ['passwd', '/etc', 'UID 0 백도어 계정 확인, uid→계정명'],
+  ['logrotate.conf, logrotate.d, journald.conf, auditd.conf, rsyslog.conf', '/etc (폴더째)', '로그 보관 기간·교체 주기, journal 저장 여부, 원격 로그 서버 전송, 예전 로그 삭제 흔적'],
   ['access.log (nginx·apache)', '/var/log/nginx, /var/log/apache2, /var/log/httpd', '웹 요청량, 접속 IP, 웹셸·SQL 인젝션·스캔 등 의심 요청, 큰 다운로드'],
   ['messages, syslog 등', '/var/log', '이름이 달라도 내용을 보고 SSH/audit/DB 로그를 자동 인식'],
 ];
@@ -3704,7 +4042,7 @@ function uploadView(){
     <div class="tablewrap" style="border:0"><table style="min-width:560px"><thead><tr><th>파일</th><th>서버 위치</th><th>보이는 것</th></tr></thead><tbody>
     ${SUPPORTED.map(r=>`<tr><td class="mono">${esc(r[0])}</td><td class="mono" style="color:var(--muted)">${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('')}</tbody></table></div>
     <p style="font-size:13px;color:var(--muted);margin:12px 0 4px">서버에서 한 번에 모으기 (압축 후 이 화면에 그대로 올리세요):</p>
-    <pre class="raw">sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd</pre></div>`;
+    <pre class="raw">sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd /etc/logrotate.conf /etc/logrotate.d /etc/systemd/journald.conf /etc/audit/auditd.conf /etc/rsyslog.conf /etc/rsyslog.d</pre></div>`;
 }
 const fsize = n => n==null?'':n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
 async function collect(dt){
@@ -4476,8 +4814,41 @@ const WEB_LABEL = {webshell:'웹셸 의심', rce:'명령 실행 시도', sqli:'S
   brute:'로그인 무차별 대입', upload:'파일 업로드', admin:'관리 페이지'};
 
 /* ── 소스 ── */
+function retentionView(){
+  const R = D.retention;
+  if(!R) return `<div class="panel" style="margin-bottom:16px"><h2>로그 보관 설정</h2><p class="hint" style="margin:0">로그 교체·보관 설정 파일을 같이 올리면 로그가 며칠치 남는지, 예전 로그가 지워졌는지, 원격 로그 서버로 보내는지 해석합니다.
+    <pre class="raw" style="margin-top:8px">sudo tar czf conf.tgz /etc/logrotate.conf /etc/logrotate.d /etc/systemd/journald.conf /etc/audit/auditd.conf /etc/rsyslog.conf /etc/rsyslog.d</pre></p></div>`;
+  const LV = {crit:['red','중요'], warn:['warn','주의'], check:['','확인'], good:['ok','참고'], info:['','정보']};
+  const fam = {};
+  R.logrotate.forEach(e=>{ (fam[e.family] ||= []).push(e); });
+  const keyFam = ['auth','syslog','wtmp','web','db','audit','ftp','cron'];
+  const rows = R.logrotate.map(e=>`<tr class="${keyFam.includes(e.family)?'':'lr-other'}">
+    <td><b>${esc(e.label)}</b><div class="mono lr-path">${e.paths.map(esc).join('<br>')}</div></td>
+    <td>${esc(e.desc)}${e.compress?' · 압축':''}${e.dateext?' · 날짜 붙은 이름':''}${e.shred?' · <b style="color:var(--high)">shred(복구 불가 삭제)</b>':''}${e.copytruncate?' · copytruncate':''}</td>
+    <td class="lr-days">${e.days!=null?esc(daysKo(e.days)):'<span class="hint">용량에 따라</span>'}</td>
+    <td>${e.per?(e.per.length?e.per.map(it=>`<div class="lr-per"><span class="mono">${esc(it.path.split('/').pop())}</span> 예전 <b>${it.rotated}</b>${e.rotate>0?`/${e.rotate}`:''}${it.gaps.length?` <b style="color:var(--crit)">.${it.gaps.join(', .')} 없음</b>`:''}${it.oldest?` <span class="hint">· ${fmt(it.oldest).slice(0,10)}부터</span>`:''}</div>`).join(''):'<span class="hint">파일 없음</span>'):'<span class="hint">로그 폴더 없음</span>'}</td>
+    <td class="mono lr-path">${esc(e.file)}</td></tr>`).join('');
+  const J = R.journald, A = R.auditd, S = R.rsyslog;
+  const authRules = S ? S.rules.filter(r=>/auth/.test(r.selector)) : [];
+  return `<section class="panel" style="margin-bottom:16px"><h2>로그 보관 설정 <small>${R.files.length}개 설정 파일 해석 · 보관 기간은 설정으로 계산한 예상치 (현재 파일 포함)</small></h2>
+    ${R.findings.length?`<div class="rfind">${R.findings.map(f=>`<div><span class="badge ${LV[f.level][0]}">${LV[f.level][1]}</span> ${esc(f.text)}</div>`).join('')}</div>`:''}
+    ${R.logrotate.length?`<h3 class="rh">logrotate — 로그 파일 교체·보관</h3>
+    <div class="tablewrap" style="border:0"><table style="min-width:760px"><thead><tr><th>로그</th><th>교체·보관 방식</th><th>예상 보관 기간</th><th>실제 남은 파일</th><th>설정 파일</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${R.logrotate.some(e=>!keyFam.includes(e.family))?`<button class="iconbtn" data-act="lrother" style="margin-top:6px">${document.body.classList.contains('lr-all')?'주요 로그만 보기':'기타 로그도 보기'}</button>`:''}`:''}
+    <div class="gcards" style="margin-top:14px">
+      ${J?`<div class="panel gcard"><h3 class="rh" style="margin-top:0">journald</h3><div>${esc(J.desc)}</div>
+        <div class="hint" style="margin-top:6px">Storage=${esc(J.storage)}${J.max_use?` · SystemMaxUse=${esc(J.max_use)}`:''}${J.max_retention?` · MaxRetentionSec=${esc(J.max_retention)}`:''}${J.forward_syslog?` · ForwardToSyslog=${esc(J.forward_syslog)}`:''}</div></div>`:''}
+      ${A?`<div class="panel gcard"><h3 class="rh" style="margin-top:0">auditd</h3><div>${esc(A.desc)}</div>
+        <div class="hint" style="margin-top:6px">max_log_file=${A.max_log_file}MB · num_logs=${A.num_logs} · max_log_file_action=${esc(A.action)}${A.disk_full_action?` · disk_full_action=${esc(A.disk_full_action)}`:''}</div></div>`:''}
+      ${S?`<div class="panel gcard"><h3 class="rh" style="margin-top:0">rsyslog — 어떤 로그가 어디로 가나</h3>
+        ${authRules.length?`<div>SSH·계정(auth) 로그 → ${authRules.map(r=>`<span class="mono">${esc(r.target)}</span>`).join(', ')}</div>`:'<div class="hint">auth 로그를 파일로 보내는 규칙을 찾지 못했습니다.</div>'}
+        ${S.remotes.length?`<div style="margin-top:6px"><b style="color:var(--c-recon)">원격 전송</b> ${S.remotes.map(r=>`<span class="mono">${esc(r.selector)} → ${esc(r.target)} (${esc(r.proto)})</span>`).join(', ')}<div class="hint">원격 로그 서버에 이 서버 로그의 사본이 있을 수 있습니다.</div></div>`:'<div class="hint" style="margin-top:6px">원격 로그 서버로 보내는 설정은 없습니다.</div>'}
+        <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">전체 규칙 ${S.rules.length}개</summary><div class="mono" style="font-size:12px;margin-top:4px">${S.rules.map(r=>`${esc(r.selector)} → ${esc(r.target)}`).join('<br>')}</div></details></div>`:''}
+    </div></section>`;
+}
+const daysKo = d => d<1 ? `${Math.round(d*24)}시간` : d<60 ? `약 ${Math.round(d)}일` : d<730 ? `약 ${Math.round(d/30)}개월` : `약 ${Math.round(d/365)}년`;
 function sources(){
-  return `<div class="tablewrap"><table class="srcs" style="min-width:560px"><thead><tr><th>로그 파일</th><th>종류</th><th style="text-align:right">이벤트</th></tr></thead><tbody>
+  return retentionView() + `<div class="tablewrap"><table class="srcs" style="min-width:560px"><thead><tr><th>로그 파일</th><th>종류</th><th style="text-align:right">이벤트</th></tr></thead><tbody>
     ${M.sources.map(s=>`<tr><td class="mono">${esc(s.path)}</td><td>${esc(s.kind)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${s.events.toLocaleString()}</td></tr>`).join('')||'<tr><td colspan="3" class="empty">읽은 로그가 없습니다.</td></tr>'}
   </tbody></table></div>
   ${M.notes.length?`<div class="notes" style="margin-top:16px">${M.notes.map(n=>`<div>${esc(n)}</div>`).join('')}</div>`:''}
@@ -4584,6 +4955,7 @@ document.addEventListener('click', ev=>{
     case 'wtype': wv.type=v||null; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
     case 'wpath': wv.q=v; wv.limit=300; { render(); const el=$('#wq'); if(el) el.scrollIntoView({block:'center'}); } break;
     case 'wmore': wv.limit+=500; { const y=window.scrollY; render(); window.scrollTo(0,y); } break;
+    case 'lrother': document.body.classList.toggle('lr-all'); render(); break;
     case 'hfile': hv.file=+v; hv.q=''; render(); window.scrollTo(0,0); break;
     case 'hline': { const e = E[+v]; if(e) openEvent(+v); break; }
     case 'guidego': go(v); break;

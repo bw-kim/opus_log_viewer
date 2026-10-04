@@ -1,0 +1,11 @@
+/var/log/mysql.log /var/log/mysql/*log {
+	daily
+	rotate 7
+	missingok
+	create 640 mysql adm
+	compress
+	sharedscripts
+	postrotate
+		test -x /usr/bin/mysqladmin || exit 0
+	endscript
+}

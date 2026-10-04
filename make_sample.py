@@ -331,8 +331,38 @@ def main():
     pgl.append(f'{pg(T("02:23:30"))} [3120] postgres@crm LOG:  disconnection: session time: 0:00:49.102 user=postgres database=crm host=[local]')
     write('var/log/postgresql/postgresql-16-main.log', '\n'.join(pgl) + '\n', mtime)
     write('var/log/nginx/access.log', '\n'.join(access_log()) + '\n', mtime)
+    # 오래된 auth 로그: .3 은 있는데 .2 가 없다 (중간 파일이 지워진 흔적)
+    write('var/log/auth.log.3.gz', '\n'.join([
+        syslog(dt.datetime(2026, 9, 18, 10, 11, 2, tzinfo=KST), 'sshd', 801,
+               f'Accepted publickey for alice from {ADMIN} port 49811 ssh2: ED25519 SHA256:aLiCeKeY0f1nGeRpRiNt'),
+    ]) + '\n', dt.datetime(2026, 9, 20, 6, 25, tzinfo=KST), gz=True)
+    write_configs(mtime)
 
     print(f'샘플 로그 생성: {ROOT}')
+
+
+def write_configs(mtime):
+    """Ubuntu 기본값에 가까운 로그 보관 설정 (+ 원격 로그 서버 전송 1줄)"""
+    write('etc/logrotate.conf', 'weekly\nsu root adm\nrotate 4\ncreate\n#dateext\n#compress\ninclude /etc/logrotate.d\n', mtime)
+    write('etc/logrotate.d/rsyslog', '/var/log/syslog\n/var/log/mail.log\n/var/log/kern.log\n/var/log/auth.log\n/var/log/user.log\n'
+          '/var/log/cron.log\n{\n\trotate 4\n\tweekly\n\tmissingok\n\tnotifempty\n\tcompress\n\tdelaycompress\n\tsharedscripts\n'
+          '\tpostrotate\n\t\t/usr/lib/rsyslog/rsyslog-rotate\n\tendscript\n}\n', mtime)
+    write('etc/logrotate.d/wtmp', '/var/log/wtmp {\n    missingok\n    monthly\n    create 0664 root utmp\n    minsize 1M\n    rotate 1\n}\n', mtime)
+    write('etc/logrotate.d/btmp', '/var/log/btmp {\n    missingok\n    monthly\n    create 0660 root utmp\n    rotate 1\n}\n', mtime)
+    write('etc/logrotate.d/nginx', '/var/log/nginx/*.log {\n\tdaily\n\tmissingok\n\trotate 14\n\tcompress\n\tdelaycompress\n\tnotifempty\n'
+          '\tcreate 0640 www-data adm\n\tsharedscripts\n\tpostrotate\n\t\tinvoke-rc.d nginx rotate >/dev/null 2>&1\n\tendscript\n}\n', mtime)
+    write('etc/logrotate.d/mysql-server', '/var/log/mysql.log /var/log/mysql/*log {\n\tdaily\n\trotate 7\n\tmissingok\n\tcreate 640 mysql adm\n'
+          '\tcompress\n\tsharedscripts\n\tpostrotate\n\t\ttest -x /usr/bin/mysqladmin || exit 0\n\tendscript\n}\n', mtime)
+    write('etc/logrotate.d/postgresql-common', '/var/log/postgresql/*.log {\n       weekly\n       rotate 10\n       copytruncate\n'
+          '       delaycompress\n       compress\n       notifempty\n       missingok\n       su root root\n}\n', mtime)
+    write('etc/systemd/journald.conf', '[Journal]\nStorage=persistent\n#Compress=yes\nSystemMaxUse=500M\nMaxRetentionSec=1month\n', mtime)
+    write('etc/audit/auditd.conf', 'log_file = /var/log/audit/audit.log\nlog_format = ENRICHED\nmax_log_file = 8\nnum_logs = 5\n'
+          'max_log_file_action = ROTATE\nspace_left_action = SYSLOG\ndisk_full_action = SUSPEND\n', mtime)
+    write('etc/rsyslog.conf', 'module(load="imuxsock")\nmodule(load="imklog" permitnonkernelfacility="on")\n'
+          '$FileOwner syslog\n$FileGroup adm\n$IncludeConfig /etc/rsyslog.d/*.conf\n', mtime)
+    write('etc/rsyslog.d/50-default.conf', 'auth,authpriv.*\t\t\t/var/log/auth.log\n*.*;auth,authpriv.none\t\t-/var/log/syslog\n'
+          'kern.*\t\t\t\t-/var/log/kern.log\nmail.*\t\t\t\t-/var/log/mail.log\n*.emerg\t\t\t\t:omusrmsg:*\n', mtime)
+    write('etc/rsyslog.d/60-remote.conf', '# 보안 로그를 중앙 로그 서버로도 보냄\nauth,authpriv.*\t@@10.0.0.9:514\n', mtime)
 
 
 def access_log():

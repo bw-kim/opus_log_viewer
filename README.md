@@ -41,7 +41,7 @@ python3 secviewer.py --root ./evidence --tz +09:00 -o report.html --json report.
 증거 수집 예시:
 
 ```bash
-sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd
+sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd /etc/logrotate.conf /etc/logrotate.d /etc/systemd/journald.conf /etc/audit/auditd.conf /etc/rsyslog.conf /etc/rsyslog.d
 ```
 
 주요 옵션: `--tz +09:00`(syslog 시간대), `--year 2026`(연도 없는 syslog), `--since 2026-10-01`,
@@ -83,7 +83,11 @@ sudo tar czf evidence.tgz /var/log /root/.*_history /home/*/.*_history /etc/pass
 - **파일 추적**: 파일마다 저장 → 압축 → 이동·복사 → 외부 유출(scp·SFTP·curl·rsync·nc) → 삭제 이력을 시간순으로
 - **세션**: `root@45.133.1.77` 같은 로그인 단위로 그 세션에서 한 일을 순서대로
 - **히스토리**: `.bash_history` 등 원문을 줄 번호와 함께 열람. 줄마다 위험도·해설, 실행 시각(있을 때), 기록 삭제 명령 이후 구간 경고
-- **로그 소스**: 읽은 파일과 경고(권한 부족, wtmp 변조 의심 등)
+- **로그 소스**: 읽은 파일과 경고(권한 부족, wtmp 변조 의심 등) + **로그 보관 설정 해석**
+  - `logrotate.conf`·`logrotate.d/*` → 로그별 교체 주기·보관 개수·예상 보관 기간, 실제 남은 예전 파일과 비교
+    (번호가 중간에 빠진 파일 = 삭제 의심, 설정보다 적은 개수, `rotate 0`·`shred`)
+  - `journald.conf` → 디스크 저장 여부(재부팅 시 사라지는지)·용량·기간, `auditd.conf` → audit 로그 보관 용량과 가득 찼을 때 동작
+  - `rsyslog.conf`·`rsyslog.d/*` → auth 로그가 어느 파일로 가는지, **원격 로그 서버로 사본을 보내는지**
 - **로그 가이드**: 봐야 할 로그별로 무엇이 남는지, 어떻게 보면 되는지, 한계, 서버에서 직접 보는 명령 + 조사 순서
   - **명령어 모음**: 침해사고 조사용 리눅스 명령 66개를 8개 분류(로그 검색 기본, SSH·로그인, 실행한 명령, 파일·시간 추적,
     계정·백도어, 프로세스·네트워크, 웹 접근 로그, 증거 보존)로 정리 — 명령마다 용도·옵션 설명, 검색, 복사 버튼
