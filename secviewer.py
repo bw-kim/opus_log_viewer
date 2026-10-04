@@ -2565,10 +2565,206 @@ class Analyzer:
         }
 
 
+# ───────────────────────── 가이드: 조사용 리눅스 명령어 모음 ─────────────────────────
+# (명령, 용도, 사용법) — 예시의 날짜·IP·PID 는 바꿔서 쓴다. 대부분 root(sudo) 권한이 필요하다.
+CMD_GUIDE = [
+    {'id': 'basic', 'name': '로그 검색 기본', 'desc': '어떤 로그든 쓰는 기본기. 파이프(|)로 이어 붙여 좁혀 갑니다.', 'items': [
+        ["grep -n 'Accepted' /var/log/auth.log",
+         '특정 단어가 들어간 줄만 찾기',
+         '-n 줄 번호 표시 · -i 대소문자 무시 · -v 그 단어가 없는 줄 · -c 개수만 · -E 정규식(예: -E "Failed|Invalid") · -A 3 / -B 3 찾은 줄의 뒤/앞 3줄도 함께'],
+        ["zgrep 'Failed password' /var/log/auth.log*",
+         '로테이션돼 .gz 로 압축된 예전 로그까지 한 번에 검색',
+         'grep 과 옵션이 같습니다. 압축 파일 내용을 그냥 보려면 zcat 파일.gz | less'],
+        ["grep -rn --include='*.log' '45.133.1.77' /var/log/",
+         '폴더 안 모든 로그에서 특정 IP·단어 찾기',
+         '-r 하위 폴더까지 · --include 검색할 파일 이름 패턴 · -l 파일 이름만'],
+        ["tail -n 100 -f /var/log/auth.log",
+         '마지막 100줄을 보고, 새로 쌓이는 줄을 실시간으로 계속 보기',
+         '-n 줄 수 · -f 계속 따라가기 · Ctrl+C 로 종료'],
+        ["less +G /var/log/auth.log",
+         '아주 큰 로그를 끝에서부터 넘겨 보기',
+         '/단어 검색 · n 다음 결과 · N 이전 결과 · G 끝 · g 처음 · q 종료'],
+        ["awk '{print $1}' 파일 | sort | uniq -c | sort -rn | head -20",
+         '어떤 칸(예: IP)이 몇 번 나왔는지 많은 순으로 순위 매기기',
+         '$1 은 공백으로 나눈 첫 번째 칸, $NF 는 마지막 칸 · uniq -c 같은 값 개수 세기(sort 먼저 필요) · sort -rn 숫자 큰 순 · head -20 상위 20개'],
+        ["sed -n '/Oct  3 02:10/,/Oct  3 02:40/p' /var/log/auth.log",
+         '시간 구간만 잘라서 보기',
+         '앞 패턴이 처음 나온 줄부터 뒤 패턴이 나온 줄까지 출력합니다. 그 시각의 줄이 실제로 있어야 하므로 분 단위로 맞추세요. syslog 는 날짜가 한 자리면 공백이 두 칸입니다.'],
+        ["wc -l /var/log/auth.log",
+         '줄 수(대략 이벤트 수) 세기',
+         'grep 결과에 이어 붙이면 해당 줄 개수: grep "Failed" auth.log | wc -l'],
+    ]},
+    {'id': 'login', 'name': 'SSH·로그인', 'desc': 'Ubuntu·Debian 은 /var/log/auth.log, RHEL·CentOS·Rocky 는 /var/log/secure 입니다.', 'items': [
+        ["grep 'Accepted' /var/log/auth.log",
+         'SSH 로그인 성공 기록 (언제·어느 계정·어느 IP 에서·비밀번호인지 키인지)',
+         '"Accepted password" 는 비밀번호, "Accepted publickey" 는 키 로그인입니다. from 뒤가 접속해 온 IP, 끝의 SHA256:… 는 사용한 키 지문입니다.'],
+        ["grep 'Failed password' /var/log/auth.log | awk '{print $(NF-3)}' | sort | uniq -c | sort -rn | head",
+         '로그인 실패가 많은 IP 순위 (무차별 대입 찾기)',
+         '$(NF-3) 는 끝에서 네 번째 칸으로, "from IP port 번호 ssh2" 형식에서 IP 자리입니다. 형식이 다르면 grep -oE "from [0-9.]+" 로 뽑으세요.'],
+        ["grep 'Invalid user' /var/log/auth.log | grep -oE 'Invalid user [^ ]+' | sort | uniq -c | sort -rn | head",
+         '공격자가 시도한 (없는) 계정 이름 순위',
+         'grep -o 는 줄 전체가 아니라 맞은 부분만 출력합니다.'],
+        ["last -i -f /var/log/wtmp | head -50",
+         '로그인·로그아웃 기록과 접속 시간',
+         '-i IP 를 숫자로 표시 · -f 읽을 파일 (wtmp.1 같은 예전 파일도 지정 가능) · "still logged in" 은 아직 접속 중'],
+        ["lastb -i -f /var/log/btmp | head -50",
+         '실패한 로그인 기록 (시도한 계정과 IP)',
+         'root 권한이 필요합니다. 결과가 너무 많으면 | awk \'{print $3}\' | sort | uniq -c | sort -rn 으로 IP 순위'],
+        ["lastlog | grep -v 'Never'",
+         '계정별 마지막 로그인 시각',
+         '평소 안 쓰는 계정에 최근 로그인이 있으면 의심합니다.'],
+        ["w", '지금 접속해 있는 사람과 그 사람이 실행 중인 명령', 'who -a 는 더 자세한 접속 정보'],
+        ["journalctl -u ssh -u sshd --since '2026-10-03 00:00' --until '2026-10-03 06:00' -o short-iso",
+         'journald 에서 sshd 기록 보기 (auth.log 가 없거나 지워졌을 때)',
+         '-u 서비스 이름(배포판에 따라 ssh 또는 sshd) · --since/--until 기간 · -o short-iso 연도·시간대가 포함된 시각'],
+        ["ausearch -m USER_LOGIN -i --start today",
+         'auditd 의 로그인 기록 (auth.log 와 교차 확인)',
+         '-m 레코드 종류 · -i 숫자를 이름으로 풀어서 표시 · --start today / recent(10분) / "10/03/2026 00:00:00"(날짜 형식은 시스템 로케일을 따름)'],
+    ]},
+    {'id': 'cmds', 'name': '실행한 명령 찾기', 'desc': '셸 히스토리는 지우기 쉬우니 auditd·sudo 기록과 같이 봅니다.', 'items': [
+        ["ls -la /root/.bash_history /home/*/.bash_history",
+         '히스토리 파일 크기·수정 시각 확인',
+         '크기가 0 이거나 /dev/null 로 연결(->)돼 있으면 누군가 기록을 지우거나 끈 것입니다.'],
+        ["cat -n /root/.bash_history",
+         '입력한 명령 원문을 줄 번호와 함께 보기',
+         '#1696… 같은 줄이 있으면 바로 다음 명령의 실행 시각(유닉스 시간)입니다: date -d @1696300000'],
+        ["grep -nE 'mysqldump|pg_dump|scp|rsync|curl|wget|nc |tar |chmod|useradd|authorized_keys|history -c' /root/.bash_history /home/*/.bash_history",
+         '사고 조사에서 중요한 명령만 골라 보기',
+         '-E 로 여러 단어를 | 로 묶어 한 번에 찾습니다.'],
+        ["grep 'COMMAND=' /var/log/auth.log",
+         'sudo 로 실행한 명령 (누가, 어느 폴더에서, 어느 계정 권한으로)',
+         'USER= 는 실행 권한 계정, PWD= 는 실행 위치입니다.'],
+        ["ausearch -m EXECVE -i --start today | grep -A1 'type=EXECVE'",
+         'auditd 가 기록한 실행 명령과 인자 (히스토리를 지워도 남음)',
+         'execve 감시 규칙이 있어야 기록됩니다. auid 는 처음 로그인한 계정, ses 는 로그인 세션 번호입니다.'],
+        ["aureport -x --summary -i",
+         '실행된 프로그램별 횟수 요약',
+         '평소 안 쓰는 프로그램(nc, socat, 낯선 /tmp 파일)이 보이는지 확인합니다.'],
+    ]},
+    {'id': 'files', 'name': '파일·시간 추적', 'desc': '침해 시간대에 생기거나 바뀐 파일을 찾습니다. -xdev 는 /proc 같은 다른 파일시스템을 건너뜁니다.', 'items': [
+        ["find / -xdev -type f -newermt '2026-10-03 02:00' ! -newermt '2026-10-03 03:00' 2>/dev/null",
+         '특정 시간대에 내용이 바뀐(만들어진) 파일',
+         '-newermt 시각 이후 수정 · ! 는 "아닌 것" · 2>/dev/null 권한 오류 숨김 · 결과가 많으면 | grep -v "^/var/lib"'],
+        ["find / -xdev -type f -newerct '2026-10-03 02:00' ! -newerct '2026-10-03 03:00' 2>/dev/null",
+         '같은 시간대에 inode(권한·소유자·이름 등)가 바뀐 파일',
+         'ctime 은 사용자가 위조할 수 없어서, touch 로 수정 시각을 속인 파일도 걸립니다.'],
+        ["find / -xdev -type f -mmin -120 2>/dev/null",
+         '최근 120분 안에 바뀐 파일',
+         '-mmin 분 단위, -mtime 일 단위(-mtime -3 = 3일 이내)'],
+        ["stat /usr/bin/수상한파일",
+         '파일의 시각 3~4종과 권한·소유자 확인',
+         'Modify(내용 변경)는 옛날인데 Change(inode 변경)가 침해 시각이면 시각을 위조했을 가능성이 큽니다.'],
+        ["ls -la --time-style=full-iso /tmp /var/tmp /dev/shm",
+         '임시 폴더의 숨김 파일·실행 파일 확인',
+         '점(.)으로 시작하는 폴더, 실행 권한(x)이 있는 파일, root 소유의 낯선 파일을 봅니다.'],
+        ["find / -xdev -type f -perm -4000 -ls 2>/dev/null",
+         'SUID 파일 목록 (누가 실행하든 소유자 권한으로 실행되는 파일)',
+         '평소 목록과 비교해 새로 생긴 것, /tmp 나 홈 폴더에 있는 것을 의심합니다.'],
+        ["find / -xdev -type f \\( -name '*.sql' -o -name '*.sql.gz' -o -name '*.dump' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.zip' \\) -mtime -7 -ls 2>/dev/null",
+         '최근 7일 안에 생긴 DB 덤프·압축 파일 (유출 준비 흔적)',
+         '\\( … -o … \\) 는 "이것 또는 저것" · -ls 크기·시각까지 표시'],
+        ["find / -xdev -type f -size +100M -mtime -3 -ls 2>/dev/null",
+         '최근 3일 안에 생긴 큰 파일',
+         '-size +100M 100MB 초과'],
+        ["debsums -c   # Debian·Ubuntu\nrpm -Va       # RHEL·CentOS·Rocky",
+         '시스템 프로그램이 원본과 달라졌는지 확인 (바이너리 변조)',
+         '패키지 설치 당시 정보와 비교해 바뀐 파일을 보여줍니다. debsums 는 별도 설치가 필요할 수 있습니다.'],
+        ["lsattr -a /root/.ssh /etc/passwd",
+         '삭제·수정 불가 잠금(chattr +i) 여부',
+         '속성에 i 가 있으면 root 도 못 지웁니다. 백도어 파일을 지키는 데 쓰입니다. 해제는 chattr -i 파일'],
+        ["sha256sum 파일",
+         '파일 해시(지문) 계산',
+         '증거 기록용, 그리고 악성 여부를 VirusTotal 등에서 해시로 조회할 때 씁니다.'],
+    ]},
+    {'id': 'persist', 'name': '계정·백도어 확인', 'desc': '공격자가 다시 들어오려고 남기는 것들입니다.', 'items': [
+        ["awk -F: '$3==0' /etc/passwd",
+         'UID 0(root 와 같은 권한) 계정 찾기',
+         '-F: 구분자를 : 로 · $3 세 번째 칸(UID) · root 말고 다른 이름이 나오면 백도어입니다.'],
+        ["awk -F: '$7 !~ /(nologin|false)$/ {print $1, $3, $6, $7}' /etc/passwd",
+         '로그인할 수 있는(셸이 있는) 계정 목록',
+         '$7 은 로그인 셸입니다. 처음 보는 계정, 홈 폴더가 이상한 계정을 확인합니다.'],
+        ["ls -la /root/.ssh /home/*/.ssh && cat /root/.ssh/authorized_keys",
+         '비밀번호 없이 들어올 수 있게 등록된 SSH 키 확인',
+         '키 끝의 "사용자@호스트" 주석과 파일 수정 시각을 봅니다.'],
+        ["ssh-keygen -lf /root/.ssh/authorized_keys",
+         '등록된 키의 지문(SHA256) 보기',
+         'auth.log 의 "Accepted publickey … SHA256:…" 과 맞춰 보면 어떤 키로 들어왔는지 알 수 있습니다.'],
+        ["grep -r 'NOPASSWD' /etc/sudoers /etc/sudoers.d/ ; getent group sudo wheel",
+         'sudo 권한(관리자 권한)을 가진 계정·설정 확인',
+         'NOPASSWD 는 비밀번호 없이 root 권한을 쓰는 설정입니다.'],
+        ["for u in $(cut -d: -f1 /etc/passwd); do crontab -l -u $u 2>/dev/null | sed \"s/^/$u: /\"; done; ls -la /etc/cron.* /var/spool/cron*",
+         '모든 계정의 예약 작업(cron) 한 번에 보기',
+         '/tmp, 숨김 폴더, curl|sh 같은 줄이 있으면 의심합니다.'],
+        ["systemctl list-unit-files --state=enabled ; ls -lt /etc/systemd/system/ | head",
+         '부팅 때 자동 실행되는 서비스와 최근 만들어진 서비스 파일',
+         'ls -lt 는 최근 수정 순 정렬입니다. 처음 보는 이름의 .service 를 열어 ExecStart= 를 확인하세요.'],
+        ["cat /etc/ld.so.preload ; cat /etc/rc.local ; ls -la /etc/profile.d/ ; tail -20 /root/.bashrc",
+         '로그인·부팅·프로그램 실행 때 몰래 끼어드는 설정 확인',
+         '/etc/ld.so.preload 는 보통 없습니다. 내용이 있으면 루트킷을 의심합니다.'],
+    ]},
+    {'id': 'proc', 'name': '프로세스·네트워크', 'desc': '지금 살아 있는 증거입니다. 재부팅하기 전에 먼저 확인·확보하세요.', 'items': [
+        ["ps auxf", '실행 중인 프로세스를 부모-자식 트리로 보기',
+         'a 모든 사용자 · u 사용자·CPU·메모리 · x 터미널 없는 것 포함 · f 트리. 웹 서버(www-data) 아래에 셸이 붙어 있으면 웹셸 의심'],
+        ["ps -eo pid,ppid,user,lstart,cmd --sort=start_time | tail -30",
+         '최근에 시작된 프로세스',
+         'lstart 는 시작 시각입니다. 침해 시각에 시작된 낯선 프로세스를 찾습니다.'],
+        ["ls -l /proc/<PID>/exe /proc/<PID>/cwd ; tr '\\0' ' ' < /proc/<PID>/cmdline",
+         '프로세스의 실제 실행 파일·작업 폴더·실행 인자',
+         '이름을 속여도(ps 에 [kworker] 처럼 보여도) exe 는 실제 파일을 가리킵니다. (deleted) 가 붙으면 파일을 지운 채 실행 중입니다.'],
+        ["ls -l /proc/*/exe 2>/dev/null | grep deleted",
+         '디스크에서 지워진 파일로 실행 중인 프로세스',
+         '악성 프로그램이 실행 후 자기 파일을 지우는 경우를 찾습니다.'],
+        ["cp /proc/<PID>/exe /root/evidence/pid_<PID>.bin",
+         '지워졌거나 의심스러운 실행 파일 확보',
+         '프로세스가 살아 있는 동안만 가능합니다. 확보 후 sha256sum 을 남기세요.'],
+        ["lsof +L1",
+         '지워졌지만 아직 열려 있는 파일 (지운 로그 복구 가능)',
+         'cp /proc/<PID>/fd/<번호> 복구본 으로 내용을 살릴 수 있습니다.'],
+        ["ss -tunap", '열린 포트와 연결, 그리고 그걸 쓰는 프로세스',
+         '-t TCP · -u UDP · -n 숫자로 표시 · -a 대기 중 포함 전부 · -p 프로세스 이름과 PID'],
+        ["ss -tnp state established", '지금 맺어져 있는 연결만 보기',
+         '낯선 외부 IP 로 나가는 연결(리버스 셸, 채굴, 유출)을 찾습니다.'],
+        ["iptables -S ; nft list ruleset", '방화벽 규칙 확인 (공격자가 지웠거나 열었는지)', '규칙이 비어 있거나 특정 포트만 열린 흔적을 봅니다.'],
+    ]},
+    {'id': 'web', 'name': '웹 접근 로그', 'desc': 'nginx·apache combined 형식 기준: $1 IP · $4 시각 · $7 요청 주소 · $9 상태 코드 · $10 응답 크기', 'items': [
+        ["awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head -20",
+         '요청이 많은 IP 순위', '평소 방문자보다 유난히 많은 IP 를 찾습니다.'],
+        ["awk '$9==404 {print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head",
+         '404(없는 주소)를 많이 낸 IP — 경로 스캔', '$9==404 상태 코드 조건입니다. 403, 500 으로 바꿔 볼 수도 있습니다.'],
+        ["awk '$9==200 && $10>10000000 {print $1, $4, $7, $10}' /var/log/nginx/access.log",
+         '10MB 이상 응답 — 큰 파일이 나간 요청', '백업·DB 파일이면 웹으로 유출됐을 수 있습니다.'],
+        ["awk '{print $7}' /var/log/nginx/access.log | cut -d'?' -f1 | sort | uniq -c | sort -rn | head -30",
+         '많이 요청된 주소 순위', 'cut 으로 ? 뒤의 파라미터를 떼고 경로만 셉니다.'],
+        ["grep -E '/uploads?/[^ ]*\\.php' /var/log/nginx/access.log",
+         '업로드 폴더 안의 .php 요청 — 웹셸 의심', '정상 사이트라면 업로드 폴더의 스크립트가 실행될 일이 거의 없습니다.'],
+        ["grep '45.133.1.77' /var/log/nginx/access.log*",
+         '특정 IP 의 모든 웹 요청 (SSH 공격 IP 와 같은지 확인)', '압축된 예전 로그는 zgrep 으로.'],
+        ["awk -F'\"' '{print $6}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head",
+         'User-Agent 순위 (스캐너·스크립트 찾기)', '-F\'"\' 로 큰따옴표 기준으로 나누면 여섯 번째 칸이 User-Agent 입니다.'],
+        ["find /var/www -type f -name '*.php' -newermt '2026-10-01' -ls",
+         '웹 폴더에 최근 생기거나 바뀐 php 파일', '웹셸이 올라왔는지 파일 쪽에서 확인합니다.'],
+        ["grep -rlE 'eval\\(|base64_decode\\(|shell_exec\\(|passthru\\(|system\\(' /var/www --include='*.php'",
+         '웹셸에 흔한 함수가 들어 있는 php 파일 찾기', '-l 파일 이름만 · 정상 플러그인도 걸릴 수 있으니 최근 생긴 파일 위주로 확인하세요.'],
+    ]},
+    {'id': 'evidence', 'name': '증거 모으기·보존', 'desc': '분석 전에 원본을 보존하고, 이 뷰어에 올릴 파일을 만듭니다.', 'items': [
+        ["date ; timedatectl", '서버의 현재 시각과 시간대 확인', '로그 시각을 해석하는 기준입니다. 이 뷰어 업로드 화면의 "로그 시간대"를 여기에 맞추세요.'],
+        ["sudo tar czf evidence_$(hostname)_$(date +%F).tgz /var/log /root/.*_history /home/*/.*_history /etc/passwd /etc/group /root/.ssh /home/*/.ssh /var/spool/cron",
+         '조사에 필요한 로그·설정을 한 파일로 모으기', '이 파일을 그대로 이 뷰어에 끌어다 놓으면 됩니다. /var/log 가 크면 --exclude=/var/log/journal 을 붙이세요.'],
+        ["sha256sum evidence_*.tgz | tee evidence.sha256", '모은 증거의 해시를 남겨 변조되지 않았음을 증명', 'tee 는 화면에 보여주면서 파일로도 저장합니다.'],
+        ["journalctl -o short-iso --since '2026-10-01' > journal_$(hostname).txt",
+         'journald 기록을 텍스트로 뽑기 (이 뷰어 업로드용)', '바이너리 journal 파일은 그대로는 못 읽으므로 텍스트로 뽑아 올립니다.'],
+        ["dd if=/dev/sda of=/mnt/usb/sda.img bs=4M conv=noerror,sync status=progress",
+         '디스크 전체 이미지 (지운 파일 복구·정밀 분석용)', '원본 디스크에는 쓰지 말고 외부 저장소에 저장합니다. 가능하면 서비스 영향을 확인한 뒤 진행하세요.'],
+        ["cp -a 원본 /root/evidence/", '권한·소유자·시각을 그대로 유지한 채 복사', '-a 는 속성을 보존합니다. 그냥 cp 하면 수정 시각이 바뀝니다.'],
+    ]},
+]
+
+
 # ───────────────────────── 출력 ─────────────────────────
 def render_html(data):
     payload = json.dumps(data, ensure_ascii=False, separators=(',', ':')).replace('</', '<\\/')
-    return HTML_TEMPLATE.replace('__SECVIEW_DATA__', payload)
+    cmds = json.dumps(CMD_GUIDE, ensure_ascii=False, separators=(',', ':')).replace('</', '<\\/')
+    return HTML_TEMPLATE.replace('__SECVIEW_DATA__', payload).replace('__SECVIEW_CMDS__', cmds)
 
 
 def empty_data(tz):
@@ -3258,6 +3454,16 @@ td.ua{font-size:11.5px;color:var(--faint);max-width:260px;overflow:hidden;text-o
 .tgl{font-size:12.5px;color:var(--muted);display:flex;gap:5px;align-items:center;white-space:nowrap}
 .appendchk{font-size:12.5px;color:var(--text);display:inline-flex;gap:5px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 10px}
 /* 가이드 */
+.gtabs{margin:0 0 14px}
+.gtabs button{padding:7px 14px;font-size:13px}
+.cmdcat{margin-bottom:12px}
+.cmditem{padding:10px 0;border-top:1px solid var(--line2)}
+.cmdcat h2+.cmditem{border-top:0;padding-top:4px}
+.cmd-use{font-weight:700;font-size:13.5px;margin-bottom:5px}
+.cmd-code{position:relative}
+.cmd-code pre{margin:0;padding:9px 64px 9px 12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-all;color:var(--text)}
+.cmd-copy{position:absolute;top:5px;right:5px;padding:3px 9px;font-size:12px}
+.cmd-how{margin-top:5px;font-size:12.5px;color:var(--muted)}
 .gsteps{margin:0;padding-left:22px;display:grid;gap:6px;font-size:13.5px}
 .gcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px}
 @media (max-width:640px){.gcards{grid-template-columns:1fr}}
@@ -3306,6 +3512,7 @@ body.dragging::after{content:"여기에 놓으면 업로드 후 분석합니다"
 <main id="main"></main>
 
 <script id="secview-data" type="application/json">__SECVIEW_DATA__</script>
+<script id="secview-cmds" type="application/json">__SECVIEW_CMDS__</script>
 <script>
 (function(){
 'use strict';
@@ -4082,17 +4289,42 @@ const GUIDE = [
     limit:'이 뷰어는 /etc/passwd 와 known_hosts 만 읽습니다. authorized_keys·crontab 은 서버에서 직접 확인하세요. known_hosts 가 해시(|1|…)로 저장돼 있으면 주소를 바로 알 수 없습니다.',
     cmd:"awk -F: '$3==0' /etc/passwd\ncat /root/.ssh/authorized_keys\ncrontab -l; ls -la /etc/cron.*" },
 ];
+const CMD_GUIDE = JSON.parse(document.getElementById('secview-cmds').textContent);
+const gv = { tab:'logs', q:'', cat:'' };
+function guideTabs(){
+  return `<div class="seg gtabs" role="tablist">${[['logs','조사 순서 · 로그 설명'],['cmds','명령어 모음']].map(([v,l])=>`<button role="tab" aria-selected="${gv.tab===v}" data-act="gtab" data-v="${v}" class="${gv.tab===v?'on':''}">${l}</button>`).join('')}</div>`;
+}
+function cmdGuideView(){
+  const q = gv.q.trim().toLowerCase();
+  const cats = CMD_GUIDE.map(c=>({...c, items: c.items.filter(([cmd,use,how])=>!q || (cmd+' '+use+' '+how).toLowerCase().includes(q))}))
+    .filter(c=>(!gv.cat || c.id===gv.cat) && c.items.length);
+  const total = cats.reduce((a,c)=>a+c.items.length,0);
+  let n = 0;
+  return `<div class="panel" style="margin-bottom:12px"><h2>침해사고 조사 명령어 모음 <small>예시의 날짜·IP·&lt;PID&gt; 는 바꿔서 쓰세요 · 대부분 root(sudo) 권한 필요</small></h2>
+      <div class="toolbar" style="margin:8px 0 6px"><input class="search" id="gq" placeholder="찾고 싶은 것 검색 (예: 로그인, 404, cron, 지운 파일, awk)" value="${esc(gv.q)}"><span class="count">${total}개</span></div>
+      <div class="chips" style="margin:0"><button class="chip ${!gv.cat?'on':''}" data-act="gcat" data-v="" style="--c:var(--accent)"><i></i>전체</button>
+        ${CMD_GUIDE.map(c=>`<button class="chip ${gv.cat===c.id?'on':''}" data-act="gcat" data-v="${c.id}" style="--c:var(--accent)"><i></i>${esc(c.name)}<span class="n">${c.items.length}</span></button>`).join('')}</div></div>
+    ${cats.map(c=>`<section class="panel cmdcat"><h2>${esc(c.name)} <small>${esc(c.desc)}</small></h2>
+      ${c.items.map(([cmd,use,how])=>{ const id = 'cmd'+(n++); return `<div class="cmditem">
+        <div class="cmd-use">${esc(use)}</div>
+        <div class="cmd-code"><pre id="${id}">${esc(cmd)}</pre><button class="iconbtn cmd-copy" data-act="copy" data-v="${id}" aria-label="명령 복사">복사</button></div>
+        <div class="cmd-how">${esc(how)}</div></div>`; }).join('')}</section>`).join('') || '<div class="panel empty">검색 결과가 없습니다.</div>'}`;
+}
 function guideView(){
+  if(gv.tab==='cmds') return guideTabs() + cmdGuideView();
+  return guideTabs() + guideLogsView();
+}
+function guideLogsView(){
   const loaded = new Set(M.sources.map(x=>x.kind));
   const steps = `<div class="panel" style="margin-bottom:16px"><h2>어떤 순서로 보면 되나요?</h2>
     <ol class="gsteps">
-      <li><b>언제, 어디로 들어왔나</b> — SSH·계정 로그에서 무차별 대입과 첫 로그인 성공(IP, 계정, 시각)을 찾습니다. → <a data-act="guidego" data-v="ips">공격자 IP</a></li>
+      <li><b>언제, 어디로 들어왔나</b> — SSH·계정 로그에서 무차별 대입과 첫 로그인 성공(IP, 계정, 시각)을 찾고, 웹으로 들어왔는지도 봅니다. → <a data-act="guidego" data-v="ips">접속 방향</a>${D.web?' · <a data-act="guidego" data-v="web">웹 접속</a>':''}</li>
       <li><b>들어와서 무엇을 했나</b> — 그 접속(세션) 동안 실행된 명령을 셸 히스토리·auditd 로 봅니다. → <a data-act="guidego" data-v="sessions">세션</a> · <a data-act="guidego" data-v="history">히스토리</a></li>
       <li><b>무엇을 가져갔나</b> — DB 덤프, 압축, 업로드·SFTP·scp 다운로드를 찾습니다. → <a data-act="kpi-go" data-v="3">DB 덤프</a> · <a data-act="kpi-go" data-v="4">파일 전송</a></li>
       <li><b>다시 들어올 문을 남겼나</b> — 계정 생성, SSH 키, crontab, 숨김 폴더의 실행 파일. → <a data-act="kpi-go" data-v="5">지속성·흔적삭제</a></li>
       <li><b>다른 서버로 넘어갔나</b> — 이 서버에서 밖으로 나간 ssh·scp·curl·nc. 들어온 접속(⬇)과 나간 접속(⬆)은 남는 로그가 다릅니다: 들어온 건 auth.log 의 "from IP", 나간 건 실행한 명령과 known_hosts. → <a data-act="guidego" data-v="ips">접속 방향</a> · <a data-act="guidego" data-v="files">파일 추적</a></li>
       <li><b>흔적을 지웠나</b> — history 삭제, 로그 비우기, auth.log 와 wtmp·audit 이 서로 안 맞는 곳.</li>
-    </ol></div>`;
+    </ol><p class="hint" style="margin:10px 0 0">서버에서 직접 확인할 때 쓰는 명령은 위의 <a data-act="gtab" data-v="cmds">명령어 모음</a>에 상황별로 정리돼 있습니다.</p></div>`;
   return steps + `<div class="gcards">${GUIDE.map(g=>{
     const has = g.kind && loaded.has(g.kind);
     return `<div class="panel gcard">
@@ -4249,6 +4481,10 @@ function render(){
     const si = $('#srvip');
     if(si) si.onchange = ()=>{ try{ localStorage.setItem('secview-server-ip', si.value.trim()); }catch(_){} SERVER_IPS = si.value.split(/[\s,]+/).filter(Boolean); if(!si.value.trim()) loadServerIps(); render(); };
   }
+  if(st.view==='guide'){
+    const q = $('#gq'); let t;
+    if(q) q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ gv.q=q.value; const pos=q.selectionStart; render(); const n=$('#gq'); n.focus(); n.setSelectionRange(pos,pos); },150); };
+  }
   if(st.view==='web'){
     const q = $('#wq'); let t;
     if(q) q.oninput = ()=>{ clearTimeout(t); t=setTimeout(()=>{ wv.q=q.value; wv.limit=300; const pos=q.selectionStart; const y=window.scrollY; render(); window.scrollTo(0,y); const n=$('#wq'); n.focus(); n.setSelectionRange(pos,pos); },200); };
@@ -4329,6 +4565,15 @@ document.addEventListener('click', ev=>{
     case 'hfile': hv.file=+v; hv.q=''; render(); window.scrollTo(0,0); break;
     case 'hline': { const e = E[+v]; if(e) openEvent(+v); break; }
     case 'guidego': go(v); break;
+    case 'gtab': gv.tab=v; render(); window.scrollTo(0,0); break;
+    case 'gcat': gv.cat=v; render(); break;
+    case 'copy': {
+      const text = document.getElementById(v).textContent;
+      const done = ()=>{ t.textContent='복사됨'; setTimeout(()=>{ t.textContent='복사'; }, 1200); };
+      const fallback = ()=>{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); done(); }catch(_){} ta.remove(); };
+      if(navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+      break;
+    }
     case 'pickdir': $('#din').click(); break;
   }
 });
